@@ -1,0 +1,32 @@
+# --- Environment / secrets ---
+.env
+.env.*
+!.env.example
+
+# --- User data (documents and vector index must never be committed) ---
+backend/data/
+data/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.egg-info/
+
+# --- Node / frontend ---
+node_modules/
+frontend/dist/
+*.local
+npm-debug.log*
+
+# --- Editors / OS ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
