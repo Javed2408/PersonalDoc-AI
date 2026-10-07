@@ -49,3 +49,49 @@ def test_chunk_settings_from_env(monkeypatch):
 def test_invalid_chunk_settings_are_rejected(size, overlap):
     with pytest.raises(ValidationError):
         Settings(_env_file=None, chunk_size=size, chunk_overlap=overlap)
+
+
+def test_embedding_and_chroma_defaults():
+    settings = Settings(_env_file=None)
+
+    assert settings.embedding_model == "sentence-transformers/all-MiniLM-L6-v2"
+    assert settings.embedding_device == "cpu"
+    assert settings.embedding_batch_size == 32
+    assert settings.chroma_dir == BACKEND_DIR / "data" / "chroma"
+    assert settings.chroma_collection == "personaldoc_chunks"
+
+
+def test_chroma_dir_follows_data_dir_unless_set(monkeypatch, tmp_path):
+    assert Settings(_env_file=None, data_dir=tmp_path).chroma_dir == tmp_path / "chroma"
+
+    monkeypatch.setenv("CHROMA_DIR", "vectors")
+    assert Settings(_env_file=None).chroma_dir == (BACKEND_DIR / "vectors").resolve()
+
+
+def test_embedding_settings_from_env(monkeypatch):
+    monkeypatch.setenv("EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5")
+    monkeypatch.setenv("EMBEDDING_DEVICE", "")
+    monkeypatch.setenv("EMBEDDING_BATCH_SIZE", "64")
+    monkeypatch.setenv("CHROMA_COLLECTION", "bge_chunks")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.embedding_model == "BAAI/bge-small-en-v1.5"
+    assert settings.embedding_device is None  # Blank means auto-detect
+    assert settings.embedding_batch_size == 64
+    assert settings.chroma_collection == "bge_chunks"
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"chroma_collection": "ab"},
+        {"chroma_collection": "has space"},
+        {"chroma_collection": "-leading-dash"},
+        {"embedding_batch_size": 0},
+        {"embedding_model": ""},
+    ],
+)
+def test_invalid_embedding_settings_are_rejected(overrides):
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, **overrides)

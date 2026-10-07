@@ -14,7 +14,7 @@ class HealthResponse(BaseModel):
 
 
 # uploaded -> processing -> processed | failed.
-# "processed" means text was extracted and chunked; it does not imply embeddings exist.
+# "processed" means text was extracted, chunked, embedded and stored in the vector index.
 DocumentStatus = Literal["uploaded", "processing", "processed", "failed"]
 
 

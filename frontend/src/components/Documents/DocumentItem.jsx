@@ -2,7 +2,7 @@ import { useState } from 'react'
 import Icon from '../Common/Icon.jsx'
 import { formatBytes, formatDate } from '../../utils/format.js'
 
-// "Processed" = text extracted and chunked. Nothing here is indexed/searchable yet.
+// "Processed" = text extracted, chunked and embedded into the local vector index.
 const STATUS_LABELS = {
   uploaded: 'Uploaded',
   processing: 'Processing…',

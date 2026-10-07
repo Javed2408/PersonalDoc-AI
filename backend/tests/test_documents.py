@@ -269,7 +269,7 @@ def test_unsafe_filenames_never_reach_the_filesystem(client, settings, filename,
     assert body["original_filename"] == expected_display_name
     assert stored_files(settings) == [f"{body['document_id']}.pdf"]
     # Nothing was written outside the storage directories (only the metadata file).
-    assert sorted(p.name for p in settings.data_dir.iterdir()) == ["chunks", "documents", "documents.json"]
+    assert sorted(p.name for p in settings.data_dir.iterdir()) == ["chroma", "chunks", "documents", "documents.json"]
 
 
 @pytest.mark.parametrize("filename", ["evil.pdf\x00.exe", "evil.pdf%00.exe", "../"])

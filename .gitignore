@@ -7,6 +7,9 @@
 backend/data/
 data/
 
+# --- Model caches (e.g. if HF_HOME / SENTENCE_TRANSFORMERS_HOME point inside the repo) ---
+.cache/
+
 # --- Python ---
 __pycache__/
 *.py[cod]

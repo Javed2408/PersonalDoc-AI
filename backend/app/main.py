@@ -9,9 +9,12 @@ from fastapi.responses import JSONResponse
 
 from app.api import documents, health
 from app.config import Settings, get_settings
+from app.retrieval.embeddings import Embedder, SentenceTransformerEmbedder
+from app.retrieval.vector_store import ChromaVectorStore
 from app.services.chunk_store import JsonChunkStore
 from app.services.document_service import DocumentService
 from app.services.document_store import JsonDocumentStore
+from app.services.indexing_service import DocumentIndexer
 from app.services.processing_service import DocumentProcessor
 
 UPLOAD_PATH = "/api/documents/upload"
@@ -19,18 +22,26 @@ UPLOAD_PATH = "/api/documents/upload"
 MULTIPART_OVERHEAD_BYTES = 64 * 1024
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def create_app(settings: Settings | None = None, embedder: Embedder | None = None) -> FastAPI:
     settings = settings or get_settings()
     logging.basicConfig(level=settings.log_level.upper())
 
+    # The model loads lazily on first use, so building the app stays cheap.
+    embedder = embedder or SentenceTransformerEmbedder(
+        settings.embedding_model, settings.embedding_device, settings.embedding_batch_size
+    )
     store = JsonDocumentStore(settings.metadata_file)
     chunk_store = JsonChunkStore(settings.chunks_dir)
-    document_service = DocumentService(settings, store, chunk_store)
-    processor = DocumentProcessor(settings, store, chunk_store, document_service)
+    vector_store = ChromaVectorStore(settings.chroma_dir, settings.chroma_collection, embedder.model_name)
+    indexer = DocumentIndexer(embedder, vector_store, settings.embedding_batch_size)
+    document_service = DocumentService(settings, store, chunk_store, vector_store)
+    processor = DocumentProcessor(settings, store, chunk_store, document_service, vector_store, indexer)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         document_service.ensure_storage()
+        # Fail fast on a broken or mismatched vector store instead of on the first upload.
+        vector_store.open()
         processor.resume_pending()
         yield
         processor.shutdown()
@@ -38,6 +49,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(title=settings.app_name, version=settings.app_version, lifespan=lifespan)
     app.state.document_service = document_service
     app.state.document_processor = processor
+    app.state.vector_store = vector_store
     app.dependency_overrides[get_settings] = lambda: settings
 
     @app.middleware("http")

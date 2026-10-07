@@ -13,6 +13,7 @@ from typing import BinaryIO
 
 from app.config import Settings
 from app.models.schemas import DocumentMetadata
+from app.retrieval.vector_store import ChromaVectorStore, VectorStoreError
 from app.services.chunk_store import ChunkStoreError, JsonChunkStore, StoredChunks
 from app.services.document_store import DocumentStoreError, JsonDocumentStore
 
@@ -77,6 +78,7 @@ class DocumentService:
         settings: Settings,
         store: JsonDocumentStore | None = None,
         chunk_store: JsonChunkStore | None = None,
+        vector_store: ChromaVectorStore | None = None,
     ) -> None:
         self._documents_dir = settings.documents_dir
         self._chunks_dir = settings.chunks_dir
@@ -84,6 +86,9 @@ class DocumentService:
         self._max_mb = settings.max_upload_size_mb
         self._store = store or JsonDocumentStore(settings.metadata_file)
         self._chunk_store = chunk_store or JsonChunkStore(settings.chunks_dir)
+        self._vector_store = vector_store or ChromaVectorStore(
+            settings.chroma_dir, settings.chroma_collection, settings.embedding_model
+        )
 
     def ensure_storage(self) -> None:
         self._documents_dir.mkdir(parents=True, exist_ok=True)
@@ -159,10 +164,13 @@ class DocumentService:
             logger.error("Failed to delete file for document %s: %s", document_id, error)
             raise DocumentStorageError("The document could not be deleted.") from error
 
+        # Metadata goes last: if anything before it fails, the document stays listed and
+        # deleting it again finishes the job (every step tolerates already-missing data).
         try:
             self._chunk_store.delete(document_id)
+            self._vector_store.delete_document(document_id)
             self._store.remove(document_id)
-        except (ChunkStoreError, DocumentStoreError) as error:
+        except (ChunkStoreError, VectorStoreError, DocumentStoreError) as error:
             raise DocumentStorageError("The document could not be deleted.") from error
         logger.info("Deleted document %s", document_id)
 

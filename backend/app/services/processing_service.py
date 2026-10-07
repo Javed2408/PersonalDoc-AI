@@ -1,7 +1,8 @@
-"""Background document processing: extract text and chunk it.
+"""Background document processing: extract text, chunk it, embed it, store the vectors.
 
-Status flow: uploaded -> processing -> processed | failed. Jobs run one at a time on a
-single worker thread so CPU-heavy extraction never blocks request handling.
+Status flow: uploaded -> processing -> processed | failed. "processed" is only set once
+the vectors are in the vector store. Jobs run one at a time on a single worker thread so
+CPU-heavy extraction and embedding never block request handling.
 """
 
 import logging
@@ -12,14 +13,18 @@ from app.config import Settings
 from app.ingestion.loader import ExtractionError
 from app.ingestion.pipeline import process_pdf
 from app.ingestion.splitter import RecursiveTextSplitter
+from app.retrieval.embeddings import EmbeddingError
+from app.retrieval.vector_store import ChromaVectorStore, VectorStoreError
 from app.services.chunk_store import ChunkStoreError, JsonChunkStore, StoredChunks
 from app.services.document_service import DocumentService, DocumentStorageError
 from app.services.document_store import DocumentStoreError, JsonDocumentStore
+from app.services.indexing_service import DocumentIndexer, IndexingCancelled
 
 logger = logging.getLogger(__name__)
 
 PENDING_STATUSES = {"uploaded", "processing"}
 GENERIC_FAILURE = "The document could not be processed."
+VECTOR_STORE_FAILURE = "The document could not be saved to the vector index. Check the backend logs."
 
 
 class DocumentProcessor:
@@ -29,10 +34,14 @@ class DocumentProcessor:
         store: JsonDocumentStore,
         chunk_store: JsonChunkStore,
         documents: DocumentService,
+        vector_store: ChromaVectorStore,
+        indexer: DocumentIndexer,
     ) -> None:
         self._store = store
         self._chunk_store = chunk_store
         self._documents = documents
+        self._vector_store = vector_store
+        self._indexer = indexer
         self._splitter = RecursiveTextSplitter(settings.chunk_size, settings.chunk_overlap)
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="document-processing")
         self._pending: set[Future] = set()
@@ -45,7 +54,11 @@ class DocumentProcessor:
         future.add_done_callback(self._forget)
 
     def resume_pending(self) -> None:
-        """Re-queue documents whose processing was interrupted (e.g. by a restart)."""
+        """Re-queue interrupted documents, and processed ones whose vectors are missing.
+
+        The second case covers documents processed before vectors existed (Phase 3), a
+        deleted or new ChromaDB collection, and crashes between storing and recording.
+        """
         try:
             documents = self._store.list()
         except DocumentStoreError:
@@ -54,6 +67,15 @@ class DocumentProcessor:
         for document in sorted(documents, key=lambda doc: doc.created_at):
             if document.status in PENDING_STATUSES:
                 self.submit(document.document_id)
+            elif document.status == "processed" and not self._vectors_complete(document):
+                logger.warning("Document %s is missing vectors; re-indexing", document.document_id)
+                self.submit(document.document_id)
+
+    def _vectors_complete(self, document) -> bool:
+        try:
+            return self._vector_store.count_document(document.document_id) == document.chunk_count
+        except VectorStoreError:
+            return False
 
     def wait_until_idle(self, timeout: float | None = None) -> bool:
         """Block until every queued job has finished. Returns False on timeout."""
@@ -105,6 +127,22 @@ class DocumentProcessor:
             self._fail(document_id, "The extracted text could not be saved.")
             return
 
+        try:
+            self._indexer.index(
+                document_id, result.chunks, is_cancelled=lambda: self._store.get(document_id) is None
+            )
+        except IndexingCancelled:
+            logger.info("Document %s was deleted during indexing; cleaning up", document_id)
+            self._discard(document_id)
+            return
+        except EmbeddingError as error:
+            # Chunks are valid and kept; only the vectors are missing.
+            self._fail(document_id, error.message, keep_chunks=True)
+            return
+        except VectorStoreError:
+            self._fail(document_id, VECTOR_STORE_FAILURE, keep_chunks=True)
+            return
+
         updated = self._store.update(
             document_id,
             status="processed",
@@ -113,16 +151,29 @@ class DocumentProcessor:
             processing_error=None,
         )
         if updated is None:
-            # Deleted while we were working: don't leave orphaned chunks behind.
-            self._chunk_store.delete(document_id)
+            # Deleted while we were working: don't leave orphaned chunks or vectors behind.
+            self._discard(document_id)
             return
         logger.info(
             "Processed document %s: %d pages, %d chunks", document_id, result.page_count, len(result.chunks)
         )
 
-    def _fail(self, document_id: str, message: str) -> None:
+    def _fail(self, document_id: str, message: str, keep_chunks: bool = False) -> None:
+        # Never leave a partial set of vectors that could later be mistaken for a full index.
         try:
-            self._chunk_store.delete(document_id)
+            self._vector_store.delete_document(document_id)
+        except VectorStoreError:
+            logger.error("Could not remove partial vectors for document %s", document_id)
+        try:
+            if not keep_chunks:
+                self._chunk_store.delete(document_id)
             self._store.update(document_id, status="failed", processing_error=message, chunk_count=None)
         except (ChunkStoreError, DocumentStoreError):
             logger.error("Could not record processing failure for document %s", document_id)
+
+    def _discard(self, document_id: str) -> None:
+        try:
+            self._vector_store.delete_document(document_id)
+            self._chunk_store.delete(document_id)
+        except (VectorStoreError, ChunkStoreError):
+            logger.error("Could not clean up after deleted document %s", document_id)

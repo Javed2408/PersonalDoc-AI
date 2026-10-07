@@ -1,5 +1,6 @@
 """Application configuration loaded from environment variables and `.env`."""
 
+import re
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated
@@ -8,6 +9,9 @@ from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
+
+# ChromaDB collection name rules.
+_COLLECTION_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{1,510}[A-Za-z0-9]$")
 
 
 class Settings(BaseSettings):
@@ -34,6 +38,17 @@ class Settings(BaseSettings):
     chunk_size: int = Field(default=1000, gt=0)
     chunk_overlap: int = Field(default=150, ge=0)
 
+    # Local embedding model (sentence-transformers / Hugging Face Hub name or local path).
+    # Changing it requires re-indexing: the vector store refuses to mix models.
+    embedding_model: str = Field(default="sentence-transformers/all-MiniLM-L6-v2", min_length=1)
+    # "cpu", "cuda", "mps"... Empty means let sentence-transformers pick.
+    embedding_device: str | None = "cpu"
+    embedding_batch_size: int = Field(default=32, gt=0, le=1024)
+
+    # ChromaDB persistence. Defaults to <DATA_DIR>/chroma; relative paths resolve against backend/.
+    chroma_dir: Path | None = None
+    chroma_collection: str = "personaldoc_chunks"
+
     @field_validator("cors_origins", mode="before")
     @classmethod
     def split_origins(cls, value: object) -> object:
@@ -46,10 +61,38 @@ class Settings(BaseSettings):
     def resolve_data_dir(cls, value: Path) -> Path:
         return value if value.is_absolute() else (BACKEND_DIR / value).resolve()
 
+    @field_validator("chroma_dir")
+    @classmethod
+    def resolve_chroma_dir(cls, value: Path | None) -> Path | None:
+        if value is None or value.is_absolute():
+            return value
+        return (BACKEND_DIR / value).resolve()
+
+    @field_validator("embedding_device", mode="before")
+    @classmethod
+    def blank_device_means_auto(cls, value: object) -> object:
+        return None if isinstance(value, str) and not value.strip() else value
+
+    @field_validator("chroma_collection")
+    @classmethod
+    def check_collection_name(cls, value: str) -> str:
+        if not _COLLECTION_NAME.match(value):
+            raise ValueError(
+                "CHROMA_COLLECTION must be 3-512 characters of letters, digits, '.', '_' or '-', "
+                "starting and ending with a letter or digit"
+            )
+        return value
+
     @model_validator(mode="after")
     def check_chunk_overlap(self) -> "Settings":
         if self.chunk_overlap >= self.chunk_size:
             raise ValueError("CHUNK_OVERLAP must be smaller than CHUNK_SIZE")
+        return self
+
+    @model_validator(mode="after")
+    def default_chroma_dir(self) -> "Settings":
+        if self.chroma_dir is None:
+            self.chroma_dir = self.data_dir / "chroma"
         return self
 
     @property

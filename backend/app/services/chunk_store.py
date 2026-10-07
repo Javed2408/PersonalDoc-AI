@@ -1,6 +1,6 @@
 """Persistent document chunks: one JSON file per document.
 
-A simple stand-in until chunks are written to the vector store in Phase 4.
+The canonical record of a document's chunks; the vector store holds their embeddings.
 """
 
 import json
