@@ -48,6 +48,25 @@ def settings(make_settings) -> Settings:
     return make_settings()
 
 
+# Fields fixed at upload time. Status and processing results change afterwards.
+UPLOAD_FIELDS = (
+    "document_id", "original_filename", "stored_filename", "file_type", "file_size", "created_at",
+)
+
+
+def upload_fields(document: dict) -> dict:
+    return {key: document[key] for key in UPLOAD_FIELDS}
+
+
 def upload(client: TestClient, filename: str = "report.pdf", content: bytes = MINIMAL_PDF,
            content_type: str = "application/pdf"):
     return client.post("/api/documents/upload", files={"file": (filename, content, content_type)})
+
+
+def wait_for_processing(client: TestClient) -> None:
+    assert client.app.state.document_processor.wait_until_idle(timeout=10), "processing did not finish"
+
+
+def get_document(client: TestClient, document_id: str) -> dict:
+    documents = client.get("/api/documents").json()["documents"]
+    return next(doc for doc in documents if doc["document_id"] == document_id)

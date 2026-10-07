@@ -6,14 +6,13 @@ Assumes a single backend process; the lock serialises writes between request thr
 
 import json
 import logging
-import os
-import tempfile
 import threading
 from pathlib import Path
 
 from pydantic import ValidationError
 
 from app.models.schemas import DocumentMetadata
+from app.services.json_files import write_json_atomic
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +42,18 @@ class JsonDocumentStore:
             documents[document.document_id] = document
             self._write(documents)
 
+    def update(self, document_id: str, **changes: object) -> DocumentMetadata | None:
+        """Apply field changes; returns the updated document, or None if it no longer exists."""
+        with self._lock:
+            documents = self._read()
+            current = documents.get(document_id)
+            if current is None:
+                return None
+            updated = current.model_copy(update=changes)
+            documents[document_id] = DocumentMetadata.model_validate(updated.model_dump())
+            self._write(documents)
+            return documents[document_id]
+
     def remove(self, document_id: str) -> None:
         with self._lock:
             documents = self._read()
@@ -64,16 +75,7 @@ class JsonDocumentStore:
     def _write(self, documents: dict[str, DocumentMetadata]) -> None:
         payload = {"documents": [doc.model_dump(mode="json") for doc in documents.values()]}
         try:
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-            # Write to a temp file and rename so a crash never leaves a half-written file.
-            fd, tmp_name = tempfile.mkstemp(dir=self._path.parent, suffix=".tmp")
-            try:
-                with os.fdopen(fd, "w", encoding="utf-8") as tmp:
-                    json.dump(payload, tmp, indent=2)
-                os.replace(tmp_name, self._path)
-            except BaseException:
-                Path(tmp_name).unlink(missing_ok=True)
-                raise
+            write_json_atomic(self._path, payload)
         except OSError as error:
             logger.error("Could not write document metadata at %s: %s", self._path, error)
             raise DocumentStoreError("Document metadata could not be saved") from error

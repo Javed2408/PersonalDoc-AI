@@ -2,6 +2,9 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { deleteDocument, listDocuments, uploadDocument } from '../services/api.js'
 
 const UPLOADED_NOTICE_MS = 3000
+const POLL_INTERVAL_MS = 1500
+// Documents in these states are still changing on the server.
+const PENDING_STATUSES = new Set(['uploaded', 'processing'])
 
 let nextUploadId = 0
 
@@ -13,13 +16,20 @@ export function useDocuments() {
   const timers = useRef(new Set())
   const libraryStatus = useRef(library.status)
   libraryStatus.current = library.status
+  // Bumped whenever an upload or delete changes the list locally. A list request that
+  // started before the bump would overwrite that change with stale data.
+  const mutations = useRef(0)
 
   useEffect(() => {
     const controller = new AbortController()
+    const startedAt = mutations.current
     setLibrary((prev) => ({ ...prev, status: 'loading', error: null }))
 
     listDocuments({ signal: controller.signal })
-      .then((documents) => setLibrary({ status: 'ok', documents, error: null }))
+      .then((documents) => {
+        if (mutations.current !== startedAt) setAttempt((n) => n + 1)
+        else setLibrary({ status: 'ok', documents, error: null })
+      })
       .catch((error) => {
         if (error.name === 'AbortError') return
         setLibrary((prev) => ({ ...prev, status: 'error', error: error.message }))
@@ -27,6 +37,33 @@ export function useDocuments() {
 
     return () => controller.abort()
   }, [attempt])
+
+  const hasPending = library.documents.some((doc) => PENDING_STATUSES.has(doc.status))
+
+  // Poll quietly (no loading state) while any document is still being processed.
+  useEffect(() => {
+    if (!hasPending) return undefined
+    const controller = new AbortController()
+    let timer
+
+    const poll = async () => {
+      const startedAt = mutations.current
+      try {
+        const documents = await listDocuments({ signal: controller.signal })
+        if (mutations.current === startedAt) setLibrary({ status: 'ok', documents, error: null })
+      } catch (error) {
+        if (error.name === 'AbortError') return
+        setLibrary((prev) => ({ ...prev, status: 'error', error: error.message }))
+      }
+      timer = setTimeout(poll, POLL_INTERVAL_MS)
+    }
+
+    timer = setTimeout(poll, POLL_INTERVAL_MS)
+    return () => {
+      controller.abort()
+      clearTimeout(timer)
+    }
+  }, [hasPending])
 
   useEffect(() => {
     const pending = timers.current
@@ -51,6 +88,7 @@ export function useDocuments() {
     updateUpload(id, { status: 'uploading', error: null })
     try {
       const document = await uploadDocument(file)
+      mutations.current += 1
       setLibrary((prev) => ({ ...prev, documents: [document, ...prev.documents] }))
       reloadIfStale()
       updateUpload(id, { status: 'uploaded' })
@@ -88,6 +126,7 @@ export function useDocuments() {
         return
       }
     }
+    mutations.current += 1
     setLibrary((prev) => ({
       ...prev,
       documents: prev.documents.filter((doc) => doc.document_id !== documentId),

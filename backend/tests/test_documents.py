@@ -3,7 +3,7 @@ from datetime import datetime
 import pytest
 
 from app.services.document_service import sanitize_display_name
-from tests.conftest import MINIMAL_PDF, upload
+from tests.conftest import MINIMAL_PDF, upload, upload_fields
 
 
 def stored_files(settings):
@@ -28,6 +28,7 @@ def test_upload_returns_correct_metadata(client):
     assert set(body) == {
         "document_id", "original_filename", "stored_filename",
         "file_type", "file_size", "status", "created_at",
+        "page_count", "chunk_count", "processing_error",
     }
     assert len(body["document_id"]) == 32
     assert body["original_filename"] == "Quarterly Report.pdf"
@@ -35,6 +36,9 @@ def test_upload_returns_correct_metadata(client):
     assert body["file_type"] == "pdf"
     assert body["file_size"] == len(MINIMAL_PDF)
     assert body["status"] == "uploaded"
+    assert body["page_count"] is None
+    assert body["chunk_count"] is None
+    assert body["processing_error"] is None
     assert datetime.fromisoformat(body["created_at"]).tzinfo is not None
 
 
@@ -69,7 +73,25 @@ def test_list_returns_uploaded_documents_newest_first(client):
     documents = client.get("/api/documents").json()["documents"]
 
     assert [d["document_id"] for d in documents] == [second["document_id"], first["document_id"]]
-    assert documents[1] == first
+    assert upload_fields(documents[1]) == upload_fields(first)
+
+
+def test_list_order_is_stable_for_identical_timestamps(client, monkeypatch):
+    import app.services.document_service as document_service
+
+    fixed = datetime(2026, 1, 1, tzinfo=document_service.UTC)
+
+    class FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed
+
+    monkeypatch.setattr(document_service, "datetime", FrozenDatetime)
+    ids = [upload(client, filename=f"{n}.pdf").json()["document_id"] for n in range(3)]
+
+    documents = client.get("/api/documents").json()["documents"]
+
+    assert [d["document_id"] for d in documents] == ids[::-1]
 
 
 def test_documents_persist_after_restart(make_client):
@@ -78,7 +100,7 @@ def test_documents_persist_after_restart(make_client):
     restarted = make_client()
     documents = restarted.get("/api/documents").json()["documents"]
 
-    assert documents == [uploaded]
+    assert [upload_fields(doc) for doc in documents] == [upload_fields(uploaded)]
 
 
 def test_corrupt_metadata_returns_safe_error_and_is_not_overwritten(client, settings):
@@ -198,7 +220,8 @@ def test_delete_removes_file_and_metadata(client, settings):
     assert response.status_code == 200
     assert response.json() == {"document_id": remove["document_id"], "deleted": True}
     assert stored_files(settings) == [keep["stored_filename"]]
-    assert client.get("/api/documents").json()["documents"] == [keep]
+    remaining = client.get("/api/documents").json()["documents"]
+    assert [upload_fields(doc) for doc in remaining] == [upload_fields(keep)]
 
 
 def test_delete_nonexistent_document_returns_404(client):
@@ -245,8 +268,8 @@ def test_unsafe_filenames_never_reach_the_filesystem(client, settings, filename,
     body = response.json()
     assert body["original_filename"] == expected_display_name
     assert stored_files(settings) == [f"{body['document_id']}.pdf"]
-    # Nothing was written outside the documents directory (only the metadata file).
-    assert sorted(p.name for p in settings.data_dir.iterdir()) == ["documents", "documents.json"]
+    # Nothing was written outside the storage directories (only the metadata file).
+    assert sorted(p.name for p in settings.data_dir.iterdir()) == ["chunks", "documents", "documents.json"]
 
 
 @pytest.mark.parametrize("filename", ["evil.pdf\x00.exe", "evil.pdf%00.exe", "../"])

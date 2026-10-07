@@ -2,97 +2,109 @@
 
 ## Current phase
 
-**Phase 2: Document Upload and Storage — complete.** Awaiting review before Phase 3.
+**Phase 3: PDF Extraction and Chunking — complete.** Awaiting review before Phase 4.
 
 ## Completed
 
 - Phase 1: FastAPI app factory, env settings, `GET /api/health`, React/Vite shell with backend status.
-- PDF upload (`POST /api/documents/upload`) with validation for extension, content type, `%PDF-` signature, empty files, size limit and unsafe filenames.
-- Local storage in `backend/data/documents/`, created at startup and git-ignored.
-- Metadata persisted in `backend/data/documents.json`.
-- Document listing (`GET /api/documents`, newest first) and deletion (`DELETE /api/documents/{id}`).
-- Frontend document library in the sidebar:
-  - upload by button or drag and drop, with Uploading → Uploaded / Upload failed states
-  - Retry and Dismiss on failed uploads
-  - refresh; delete with inline confirmation
-  - empty, loading and error states
+- Phase 2: PDF upload, validation and local storage; JSON metadata; list and delete; frontend document library.
+- Phase 3:
+  - **PDF extraction:** pypdf, one `PageText` per page, 1-based page numbers, normalised whitespace.
+  - **Page-level text:** empty or graphics-only pages are kept as empty text.
+  - **Recursive chunking:** each page is chunked separately.
+  - **Chunk metadata:** IDs, page, index, offsets.
+  - **Processing states:** `uploaded → processing → processed | failed`, run on a background worker. Interrupted jobs resume at startup.
+  - `GET /api/documents/{id}/chunks` to inspect chunks. Returns 409 until processed.
+  - Frontend shows the new statuses, page and chunk counts, and failure reasons, and polls while anything is pending.
 
 ## Project structure
 
 ```text
 backend/app/
-  main.py                      create_app(settings?): CORS, upload size guard, routers, lifespan creates storage
-  config.py                    Settings + DATA_DIR, MAX_UPLOAD_SIZE_MB, derived documents_dir/metadata_file
-  api/health.py, api/documents.py
-  services/document_service.py validation, streaming save, delete (raises DocumentError subclasses)
-  services/document_store.py   JsonDocumentStore (lock + atomic write)
-  models/schemas.py            HealthResponse, DocumentMetadata, list/delete responses
-backend/tests/                 conftest.py (tmp data dir per test), test_health, test_config, test_documents
-frontend/src/
-  services/api.js              request() + getHealth/listDocuments/uploadDocument/deleteDocument
-  hooks/useHealth.js, hooks/useDocuments.js
-  components/Documents/        DocumentLibrary, UploadDropzone, UploadItem, DocumentItem
-  components/Common/           StatusIndicator, BackendStatusCard, Icon
-  components/Layout/           Header, Sidebar
-  utils/format.js
+  main.py                        create_app(settings?): stores, services, processor, lifespan (storage + resume)
+  config.py                      + CHUNK_SIZE, CHUNK_OVERLAP (validated overlap < size), chunks_dir
+  api/documents.py               upload (then submit for processing), list, chunks, delete
+  ingestion/loader.py            extract_pages(path) -> list[PageText]; ExtractionError(message)
+  ingestion/splitter.py          RecursiveTextSplitter -> TextChunk(text, start)
+  ingestion/pipeline.py          process_pdf(...) -> ProcessedDocument(page_count, chunks)
+  services/document_service.py   upload/delete/get_chunks; stored_path()
+  services/processing_service.py DocumentProcessor (1-thread executor, submit/resume_pending/wait_until_idle)
+  services/document_store.py     JSON metadata (+ update())
+  services/chunk_store.py        data/chunks/<document_id>.json
+  services/json_files.py         write_json_atomic (shared)
+backend/tests/                   pdf_factory.py builds test PDFs in memory; test_ingestion, test_processing
+frontend/src/hooks/useDocuments.js  + silent polling while uploaded/processing; stale-response guard
 ```
 
 ## Important decisions
 
-- **Document ID:** `uuid4().hex`. The stored filename is always `<document_id>.pdf`. The client filename is display-only: it is reduced to its basename, control/format characters are stripped, and it is truncated to 200 chars. It is never used as a path.
-- **Storage:** the upload streams to `.<id>.pdf.part` (exclusive create), then is renamed into place. Every path is resolved and checked to stay inside the documents directory.
-- **Metadata persistence:** a single JSON file behind `JsonDocumentStore`, using a threading lock and temp-file + `os.replace` writes. Assumes one backend process. If the file is unreadable, endpoints return 500 and the file is never overwritten. The store is small and replaceable (e.g. SQLite later).
-- **Upload size:** `MAX_UPLOAD_SIZE_MB` (default 25).
-  - Enforced twice: a middleware pre-check on `Content-Length`, and an exact byte count while streaming.
-  - The pre-check drains the body before sending 413. Answering mid-upload makes the Vite proxy return 502.
-- **Status:** `uploaded` | `failed`. The backend only persists successful uploads. Failed attempts are shown client-side for the session with Retry.
-- **Consistency:** if the metadata write fails, the stored file is removed. Delete removes the file first and keeps the metadata if removal fails; a file that is already missing is tolerated.
-- **Errors:** the API returns `{"detail": "<safe message>"}` with 400/404/413/415/500. The frontend shows `detail`, with fallbacks per status code.
-- **Logging:** document IDs and sizes only. No filenames or contents are logged.
-- New dependency: `python-multipart==0.0.32`, which FastAPI requires for file uploads.
+- **PDF library:** `pypdf==6.19.0`, which has no dependencies. The file is read into memory and closed before parsing, so a document can be deleted mid-processing on Windows. One bad page becomes an empty page instead of failing the document.
+- **Splitter:** a local reimplementation of LangChain's `RecursiveCharacterTextSplitter` algorithm (separators `\n\n`, `\n`, space, character). `langchain-text-splitters` was rejected because it pulls in langchain-core and about 30 packages, including langsmith. It works on character offsets, so every chunk is an exact slice of its page text.
+- **Chunk size / overlap:** 1000 / 150 characters, set by `CHUNK_SIZE` / `CHUNK_OVERLAP`. Overlap happens at split boundaries, so it is at most 150. With line-wrapped PDF text it is about one line (~80 chars).
+- **Page boundaries:** pages are chunked independently, so each chunk has exactly one `page_number` and nothing spans pages. `start_char` is the offset within that page's text.
+- **Chunk metadata:** `chunk_id` (`<document_id>-<index:05d>`, deterministic so re-processing is idempotent for Phase 4), `document_id`, `original_filename`, `page_number`, `chunk_index` (document-wide, 0-based), `start_char`, `char_count`, `text`.
+- **Chunk persistence:** one JSON file per document in `data/chunks/`, written atomically. It records the `chunk_size` and `chunk_overlap` used. The chunk store is the boundary Phase 4 replaces or feeds.
+- **Document metadata:** added `page_count`, `chunk_count` and `processing_error`, all optional, so Phase 2 metadata files still load.
+- **Failures:** the PDF is always kept, and the status becomes `failed` with a safe message:
+  - corrupted
+  - password-protected
+  - no extractable text (scanned)
+  - no pages
+  - file missing
+  - chunks unsaveable
+  - unexpected error (logged with traceback; generic message to users)
+- **Processing:** a single-worker thread pool keeps uploads fast and processes documents in order. A delete during processing leaves no orphaned chunks. Already-processed documents are not re-processed on restart.
+- **List ordering:** newest first, ties broken by insertion order. This fixed a real bug: same-millisecond uploads could come back in the wrong order.
 
 ## Commands
 
 ```bash
 # Backend (backend/)
-python -m venv .venv && .venv/Scripts/pip install -r requirements-dev.txt
+.venv/Scripts/pip install -r requirements-dev.txt
 .venv/Scripts/python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 .venv/Scripts/python -m pytest
 
 # Frontend (frontend/)
-npm install
-npm run dev      # http://localhost:5173
+npm install && npm run dev      # open http://127.0.0.1:5173
 npm run build
 ```
 
 ## Tests
 
-- **Backend:** 48 passed. The 4 Phase 1 tests still pass, and Phase 2 adds tests for:
-  - upload and metadata
-  - listing order, restart persistence and corrupt metadata
-  - unsupported types and fake PDFs, empty files, oversized files (pre-check, streaming, exact limit)
-  - missing and malformed multipart
-  - duplicate filenames
-  - delete, delete of a missing ID, delete when the file is already missing
-  - path-traversal filenames and IDs, filename sanitisation, config parsing
-- Tests use a per-test tmp data dir; the real `backend/data/` was not touched by tests.
-- `npm run build` passes.
-- **Browser (Chrome, real PDFs):**
-  - upload; persists after page reload
-  - two `report.pdf` files coexist; deleting one removes the right file and metadata on disk
-  - `.txt` and a fake `.pdf` show readable 415 messages; Retry and Dismiss work
-  - backend offline: list, upload and delete each show "Can't reach the backend"; Retry recovers once it's back
-  - 2 MB file with a 1 MB limit shows the size-limit message
-  - no console errors
+- **102 passed** across: config 8, documents (Phase 2 plus a tie-order regression) 42, health 3, ingestion 31, processing 18. The suite ran 25 times in a row with no failures.
+- **Extraction tests:**
+  - normal and multi-page text, page numbers
+  - empty and graphics-only pages, special characters
+  - corrupted and truncated PDFs, missing files, password protection
+  - file released after reading, text normalisation
+- **Chunking tests:**
+  - chunk size limit and fill level, overlap of 150 or less with matching text
+  - zero overlap, full coverage, paragraph preference, character fallback
+  - determinism, invalid settings
+  - one chunk per page on the quality document, chunks never crossing pages, sequential and unique IDs
+- **Processing tests:**
+  - status flow (observed `processing`), chunks endpoint and metadata, configured chunk sizes, duplicate filenames
+  - failures: corrupted, no-text, unexpected exception, missing file
+  - resume after restart, chunks persisting, delete removing chunks, delete during processing
+- **Regression:** all Phase 1 and 2 tests still pass. Four Phase 2 assertions now compare only the upload-time fields, because status changes after upload, and one expects the new `chunks/` directory.
+- **Browser (Chrome):**
+  - 800-page PDF went Uploaded → Processing… → Processed (800 pages · 3200 chunks)
+  - quality PDF processed into 2 pages and 2 chunks; the API returned the expected chunk text and metadata
+  - corrupted and scanned PDFs showed Failed with readable reasons
+  - state survived a page reload and a backend restart, with no re-processing
+  - deleting a duplicate-named document removed the right PDF and chunk file
+  - header showed "Local / Ready"; no console errors
 
 ## Known issues
 
-- The header/backend status is only checked on page load, so it can say "Local / Ready" while document requests are failing. Periodic health polling would fix this.
-- In dev, React StrictMode double-fetches on mount, so DevTools shows one aborted request. Dev-only.
-- No frontend unit-test runner yet. The frontend is verified by build and manual browser testing.
-- Metadata store assumes a single backend process; multiple uvicorn workers would need a real database.
-- On Windows, stopping `npm run dev` from a parent process can leave the `node` Vite process running on port 5173.
+- Header backend status is checked only on page load (from Phase 2).
+- Scanned or image-only PDFs fail; OCR is a later enhancement.
+- No API to re-process a failed document yet (re-index is a later phase). Delete it and upload again.
+- Processing is CPU-bound Python on one worker; an 800-page PDF takes about 3–4 s, and list requests slow slightly meanwhile.
+- The metadata store assumes a single backend process.
+- No frontend unit-test runner.
+- On this machine, another project's Vite also listens on `[::1]:5173`, so use `http://127.0.0.1:5173` for PersonalDoc.
 
 ## Next phase
 
-Phase 3: PDF Extraction and Chunking. Not started.
+Phase 4: Embeddings and ChromaDB. Not started.

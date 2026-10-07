@@ -4,7 +4,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Annotated
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     data_dir: Path = BACKEND_DIR / "data"
     max_upload_size_mb: int = Field(default=25, gt=0)
 
+    # Text chunking, in characters.
+    chunk_size: int = Field(default=1000, gt=0)
+    chunk_overlap: int = Field(default=150, ge=0)
+
     @field_validator("cors_origins", mode="before")
     @classmethod
     def split_origins(cls, value: object) -> object:
@@ -42,9 +46,19 @@ class Settings(BaseSettings):
     def resolve_data_dir(cls, value: Path) -> Path:
         return value if value.is_absolute() else (BACKEND_DIR / value).resolve()
 
+    @model_validator(mode="after")
+    def check_chunk_overlap(self) -> "Settings":
+        if self.chunk_overlap >= self.chunk_size:
+            raise ValueError("CHUNK_OVERLAP must be smaller than CHUNK_SIZE")
+        return self
+
     @property
     def documents_dir(self) -> Path:
         return self.data_dir / "documents"
+
+    @property
+    def chunks_dir(self) -> Path:
+        return self.data_dir / "chunks"
 
     @property
     def metadata_file(self) -> Path:

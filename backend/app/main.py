@@ -9,7 +9,10 @@ from fastapi.responses import JSONResponse
 
 from app.api import documents, health
 from app.config import Settings, get_settings
+from app.services.chunk_store import JsonChunkStore
 from app.services.document_service import DocumentService
+from app.services.document_store import JsonDocumentStore
+from app.services.processing_service import DocumentProcessor
 
 UPLOAD_PATH = "/api/documents/upload"
 # Allowance for multipart boundaries and headers on top of the file itself.
@@ -20,15 +23,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
     logging.basicConfig(level=settings.log_level.upper())
 
-    document_service = DocumentService(settings)
+    store = JsonDocumentStore(settings.metadata_file)
+    chunk_store = JsonChunkStore(settings.chunks_dir)
+    document_service = DocumentService(settings, store, chunk_store)
+    processor = DocumentProcessor(settings, store, chunk_store, document_service)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         document_service.ensure_storage()
+        processor.resume_pending()
         yield
+        processor.shutdown()
 
     app = FastAPI(title=settings.app_name, version=settings.app_version, lifespan=lifespan)
     app.state.document_service = document_service
+    app.state.document_processor = processor
     app.dependency_overrides[get_settings] = lambda: settings
 
     @app.middleware("http")

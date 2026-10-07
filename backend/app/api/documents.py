@@ -1,16 +1,23 @@
-"""Document upload, listing and deletion endpoints."""
+"""Document upload, listing, deletion and chunk inspection endpoints."""
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 
-from app.models.schemas import DocumentDeleteResponse, DocumentListResponse, DocumentMetadata
+from app.models.schemas import (
+    DocumentChunksResponse,
+    DocumentDeleteResponse,
+    DocumentListResponse,
+    DocumentMetadata,
+)
 from app.services.document_service import (
     DocumentError,
     DocumentNotFoundError,
+    DocumentNotProcessedError,
     DocumentService,
     DocumentStorageError,
     FileTooLargeError,
     UnsupportedFileTypeError,
 )
+from app.services.processing_service import DocumentProcessor
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
@@ -19,9 +26,15 @@ def get_document_service(request: Request) -> DocumentService:
     return request.app.state.document_service
 
 
+def get_document_processor(request: Request) -> DocumentProcessor:
+    return request.app.state.document_processor
+
+
 def to_http_error(error: DocumentError) -> HTTPException:
     if isinstance(error, DocumentNotFoundError):
         code = status.HTTP_404_NOT_FOUND
+    elif isinstance(error, DocumentNotProcessedError):
+        code = status.HTTP_409_CONFLICT
     elif isinstance(error, FileTooLargeError):
         code = status.HTTP_413_CONTENT_TOO_LARGE
     elif isinstance(error, UnsupportedFileTypeError):
@@ -45,13 +58,35 @@ def list_documents(service: DocumentService = Depends(get_document_service)) -> 
 def upload_document(
     file: UploadFile = File(...),
     service: DocumentService = Depends(get_document_service),
+    processor: DocumentProcessor = Depends(get_document_processor),
 ) -> DocumentMetadata:
     try:
-        return service.save_upload(file.filename, file.content_type, file.file)
+        document = service.save_upload(file.filename, file.content_type, file.file)
     except DocumentError as error:
         raise to_http_error(error) from error
     finally:
         file.file.close()
+    # Extraction and chunking run in the background; clients poll the list for status.
+    processor.submit(document.document_id)
+    return document
+
+
+@router.get("/{document_id}/chunks", response_model=DocumentChunksResponse)
+def get_document_chunks(
+    document_id: str,
+    service: DocumentService = Depends(get_document_service),
+) -> DocumentChunksResponse:
+    try:
+        stored = service.get_chunks(document_id)
+    except DocumentError as error:
+        raise to_http_error(error) from error
+    return DocumentChunksResponse(
+        document_id=stored.document_id,
+        chunk_size=stored.chunk_size,
+        chunk_overlap=stored.chunk_overlap,
+        chunk_count=len(stored.chunks),
+        chunks=stored.chunks,
+    )
 
 
 @router.delete("/{document_id}", response_model=DocumentDeleteResponse)
