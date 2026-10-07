@@ -15,13 +15,14 @@
 
   --radius-sm: 6px;
   --radius-md: 10px;
+  --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
   --space-4: 16px;
   --space-6: 24px;
   --space-8: 32px;
 
-  --sidebar-width: 260px;
+  --sidebar-width: 300px;
   --transition: 150ms ease;
 
   color-scheme: dark;
