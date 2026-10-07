@@ -1,12 +1,14 @@
 """Persistent vector storage in ChromaDB.
 
-Stores and removes chunk vectors and reports on what is stored. Querying for
-similar chunks belongs to the retriever (Phase 5), not here.
+Stores and removes chunk vectors, reports on what is stored, and runs the raw
+nearest-neighbour query. Retrieval logic (validation, filtering policy, result
+shaping) lives in the retriever; this module only talks to ChromaDB.
 """
 
 import logging
 import threading
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 import chromadb
@@ -26,6 +28,14 @@ class VectorStoreError(Exception):
 
 class EmbeddingModelMismatchError(VectorStoreError):
     """The collection was built with a different embedding model than the one configured."""
+
+
+@dataclass(frozen=True)
+class VectorHit:
+    chunk_id: str
+    text: str
+    metadata: dict
+    distance: float  # Cosine distance, as returned by ChromaDB (lower = more similar)
 
 
 def chunk_metadata(chunk: Chunk) -> dict[str, str | int]:
@@ -119,6 +129,43 @@ class ChromaVectorStore:
         except ChromaError as error:
             logger.error("Could not delete vectors for %s: %s", document_id, error)
             raise VectorStoreError("Vectors could not be deleted") from error
+
+    def query_nearest(
+        self, embedding: Sequence[float], n_results: int, document_ids: Sequence[str]
+    ) -> list[VectorHit]:
+        """The n_results nearest vectors among the given documents, closest first.
+
+        Returns fewer hits when fewer vectors match. An empty document list matches nothing.
+        """
+        if n_results < 1:
+            raise ValueError("n_results must be at least 1")
+        if not document_ids:
+            return []
+        where = (
+            {"document_id": document_ids[0]}
+            if len(document_ids) == 1
+            else {"document_id": {"$in": list(document_ids)}}
+        )
+        try:
+            result = self._get_collection().query(
+                query_embeddings=[list(embedding)],
+                n_results=n_results,
+                where=where,
+                include=["documents", "metadatas", "distances"],
+            )
+        except (ChromaError, ValueError) as error:
+            logger.error("Vector query failed: %s", error)
+            raise VectorStoreError("The vector store could not be searched") from error
+
+        ids = result["ids"][0] if result["ids"] else []
+        if not ids:
+            return []
+        return [
+            VectorHit(chunk_id=chunk_id, text=text, metadata=metadata, distance=float(distance))
+            for chunk_id, text, metadata, distance in zip(
+                ids, result["documents"][0], result["metadatas"][0], result["distances"][0]
+            )
+        ]
 
     def stats(self) -> dict[str, str | int]:
         collection = self._get_collection()

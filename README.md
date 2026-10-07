@@ -2,7 +2,7 @@
 
 A privacy-first, local RAG application for chatting with your personal documents using a locally running LLM.
 
-> **Status:** Phase 4 (embeddings and ChromaDB). Uploaded PDFs are processed in the background: text is extracted page by page, split into overlapping chunks, embedded with a local model and stored in a local ChromaDB vector index. Everything stays on your machine. Retrieval, search and chat come in later phases (see [Phases.md](Phases.md)).
+> **Status:** Phase 5 (retrieval). Uploaded PDFs are processed in the background: text is extracted page by page, split into overlapping chunks, embedded with a local model and stored in a local ChromaDB vector index. A retrieval API returns the chunks most relevant to a question, with their document, page and distance. Everything stays on your machine. Answer generation and chat come in later phases (see [Phases.md](Phases.md)).
 
 ## Project documents
 
@@ -25,14 +25,16 @@ PersonalDoc-AI/
 │   │   ├── config.py        Settings (pydantic-settings, reads backend/.env)
 │   │   ├── api/
 │   │   │   ├── health.py    GET /api/health
-│   │   │   └── documents.py Upload / list / delete / chunks endpoints
+│   │   │   ├── documents.py Upload / list / delete / chunks endpoints
+│   │   │   └── retrieval.py POST /api/retrieval/search
 │   │   ├── ingestion/
 │   │   │   ├── loader.py    PDF -> per-page text (pypdf)
 │   │   │   ├── splitter.py  Recursive character text splitter
 │   │   │   └── pipeline.py  Pages -> chunks with metadata
 │   │   ├── retrieval/
 │   │   │   ├── embeddings.py    Embedder interface + sentence-transformers model
-│   │   │   └── vector_store.py  ChromaDB persistence (store / delete / stats; no querying yet)
+│   │   │   ├── vector_store.py  ChromaDB persistence (store / delete / stats / nearest-neighbour query)
+│   │   │   └── retriever.py     Question -> top-k chunks (validation, filtering, scoring)
 │   │   ├── services/
 │   │   │   ├── document_service.py    Validation, file storage, deletion
 │   │   │   ├── document_store.py      JSON metadata persistence
@@ -45,6 +47,7 @@ PersonalDoc-AI/
 │   │   ├── chunks/          Extracted chunks, <document_id>.json
 │   │   ├── chroma/          ChromaDB vector index
 │   │   └── documents.json   Document metadata
+│   ├── evaluation/          Retrieval evaluation set, runner and saved results
 │   ├── tests/               pytest suite
 │   ├── requirements.txt     Runtime dependencies
 │   ├── requirements-dev.txt Runtime + test dependencies
@@ -111,6 +114,7 @@ Interactive API docs are at http://127.0.0.1:8000/docs.
 | `POST` | `/api/documents/upload` | Upload one PDF (multipart field `file`). Returns `201` with metadata |
 | `GET` | `/api/documents/{document_id}/chunks` | Extracted text chunks of a processed document |
 | `DELETE` | `/api/documents/{document_id}` | Delete a document's file, chunks and metadata |
+| `POST` | `/api/retrieval/search` | Most relevant chunks for a question (no answer generation) |
 
 ```bash
 curl -F "file=@report.pdf;type=application/pdf" http://127.0.0.1:8000/api/documents/upload
@@ -137,7 +141,64 @@ uploaded -> processing -> processed   (extracted, chunked, embedded and stored i
 - At startup, documents left `uploaded` or `processing` are processed again, and `processed` documents whose vectors are missing (for example after deleting `data/chroma`) are re-indexed.
 - Deleting a document removes its PDF, chunks, vectors and metadata.
 
-Vectors are stored but not yet queried: retrieval arrives in Phase 5.
+### Retrieval
+
+`POST /api/retrieval/search` embeds the question once with the same local model, runs one ChromaDB nearest-neighbour query, and returns the top-k chunks. It never generates an answer.
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/retrieval/search   -H "Content-Type: application/json"   -d '{"query": "What are the main findings?", "k": 4, "document_ids": []}'
+```
+
+```json
+{
+  "query": "What are the main findings?",
+  "k": 4,
+  "document_ids": null,
+  "result_count": 4,
+  "results": [
+    {
+      "rank": 1,
+      "chunk_id": "<document_id>-00021",
+      "document_id": "<document_id>",
+      "original_filename": "report.pdf",
+      "page_number": 14,
+      "chunk_index": 21,
+      "start_char": 0,
+      "char_count": 912,
+      "text": "...",
+      "distance": 0.23,
+      "similarity": 0.77
+    }
+  ]
+}
+```
+
+- **Request:**
+  - `query`: required, trimmed, 1–2000 characters.
+  - `k`: optional, 1–`RETRIEVAL_MAX_K`; default `RETRIEVAL_TOP_K` (4).
+  - `document_ids`: optional. Omitted or `[]` searches every processed document; otherwise only the listed ones.
+- **Scores:**
+  - `distance` is ChromaDB's cosine distance, `1 − cosine similarity`: 0 means the same direction, about 1 means unrelated, 2 means opposite. **Lower is more similar**, and results are sorted by it, with ties broken by `chunk_id`.
+  - `similarity` is exactly `1 − distance`, so higher is more similar.
+  - Both are geometric measures, not probabilities or confidence.
+- **What gets searched:** only `processed` documents, so partially indexed or failed documents never appear. Fewer than k results come back when fewer chunks exist; results are never padded.
+- **No threshold by default:** plain top-k always returns the nearest chunks, even for questions the documents can't answer. Their larger distances show it. `RETRIEVAL_MAX_DISTANCE` can drop chunks beyond a cut-off, but it stays off until evaluation (Phase 9) justifies a value.
+- **Errors:**
+  - `422`: empty query, k out of range, or a malformed document ID
+  - `404`: unknown document ID
+  - `409`: the document isn't processed yet, or failed
+  - `503`: the embedding model or vector index is unavailable
+- **Privacy:** INFO logs record only k, the filter size, the result count and the best distance. Query text and per-result details are logged only at `LOG_LEVEL=DEBUG`.
+
+### Retrieval evaluation
+
+`backend/evaluation/retrieval_dataset.json` holds 3 small documents with deliberately shared vocabulary and 15 questions: 12 answerable, each tied to the page with its answer, and 3 the documents can't answer. The runner indexes them with the real model in a throwaway directory (never `backend/data`) and checks whether the right page appears in the top-k:
+
+```bash
+cd backend
+python -m evaluation.retrieval_eval           # print the report
+python -m evaluation.retrieval_eval --write   # also update evaluation/results/retrieval_baseline.md
+```
 
 ### Embedding model and first run
 
@@ -169,6 +230,9 @@ Settings are read from environment variables or `backend/.env`. All have default
 | `EMBEDDING_BATCH_SIZE` | `32` | Chunks embedded per batch |
 | `CHROMA_DIR` | `<DATA_DIR>/chroma` | ChromaDB storage directory |
 | `CHROMA_COLLECTION` | `personaldoc_chunks` | ChromaDB collection name |
+| `RETRIEVAL_TOP_K` | `4` | Default number of chunks returned per query |
+| `RETRIEVAL_MAX_K` | `20` | Largest `k` a request may ask for (at most 100) |
+| `RETRIEVAL_MAX_DISTANCE` | *(empty: off)* | Optional cosine-distance cut-off (0–2) |
 
 Uploaded documents never leave `DATA_DIR`, and that directory is git-ignored.
 

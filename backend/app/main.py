@@ -7,9 +7,10 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api import documents, health
+from app.api import documents, health, retrieval
 from app.config import Settings, get_settings
 from app.retrieval.embeddings import Embedder, SentenceTransformerEmbedder
+from app.retrieval.retriever import Retriever
 from app.retrieval.vector_store import ChromaVectorStore
 from app.services.chunk_store import JsonChunkStore
 from app.services.document_service import DocumentService
@@ -36,6 +37,13 @@ def create_app(settings: Settings | None = None, embedder: Embedder | None = Non
     indexer = DocumentIndexer(embedder, vector_store, settings.embedding_batch_size)
     document_service = DocumentService(settings, store, chunk_store, vector_store)
     processor = DocumentProcessor(settings, store, chunk_store, document_service, vector_store, indexer)
+    # Shares the embedder (one model in memory) and the vector store (one ChromaDB client).
+    retriever = Retriever(
+        embedder, vector_store, store,
+        default_k=settings.retrieval_top_k,
+        max_k=settings.retrieval_max_k,
+        max_distance=settings.retrieval_max_distance,
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -50,6 +58,7 @@ def create_app(settings: Settings | None = None, embedder: Embedder | None = Non
     app.state.document_service = document_service
     app.state.document_processor = processor
     app.state.vector_store = vector_store
+    app.state.retriever = retriever
     app.dependency_overrides[get_settings] = lambda: settings
 
     @app.middleware("http")
@@ -80,6 +89,7 @@ def create_app(settings: Settings | None = None, embedder: Embedder | None = Non
 
     app.include_router(health.router, prefix="/api")
     app.include_router(documents.router, prefix="/api")
+    app.include_router(retrieval.router, prefix="/api")
     return app
 
 

@@ -1,0 +1,46 @@
+{
+  "description": "Retrieval evaluation set (Phase 5). Three small documents on different topics with deliberately shared vocabulary ('layers' appears in all three, 'training' in two). Each answerable question names the page holding its answer; unanswerable questions have expected = null.",
+  "documents": [
+    {
+      "filename": "ml_handbook.pdf",
+      "pages": [
+        "Supervised learning\nIn supervised learning, a model learns patterns from labelled training data. Each training example pairs an input, such as an email, with the correct output, such as spam or not spam. During training the model adjusts its parameters to reduce the difference between its predictions and the labels. Once trained, the model is evaluated on a separate test set that it never saw during training, which estimates how well it will perform on new data.",
+        "Overfitting\nOverfitting happens when a model memorises the training data instead of learning general patterns. An overfitted model scores very well on the training set but poorly on new examples. Common remedies include collecting more data, using a simpler model, adding regularisation such as L2 weight penalties or dropout, and stopping training early when the validation loss starts to rise.",
+        "Neural networks\nA neural network is built from layers of connected units. The input layer receives the features, hidden layers transform them into more useful representations, and the output layer produces the prediction. Weights are updated with gradient descent: backpropagation computes how much each weight contributed to the error, and the optimiser nudges every weight in the direction that reduces the loss. The learning rate controls the size of each step."
+      ]
+    },
+    {
+      "filename": "kitchen_notes.pdf",
+      "pages": [
+        "Bread\nGood bread starts with flour, water, salt and yeast. After mixing, knead the dough for about ten minutes until it is smooth and elastic. Let it rise in a warm place until it has roughly doubled in size, which usually takes one to two hours. Shape the loaf, let it proof again for 45 minutes, then bake at 230 degrees Celsius until the crust is deep brown and the loaf sounds hollow when tapped.",
+        "Food safety\nUse separate cutting boards for raw meat and for vegetables to avoid cross-contamination. Wash boards, knives and hands with hot soapy water after handling raw chicken. Keep the fridge at or below 4 degrees Celsius, and never leave cooked food at room temperature for more than two hours. Reheat leftovers until they are steaming hot all the way through.",
+        "Cakes and sauces\nA classic layer cake is built from three sponge layers separated by buttercream. Chill each layer before stacking so the cake stays level. For mayonnaise, whisk egg yolk with mustard and add the oil drop by drop; adding the oil too quickly breaks the emulsion and the sauce splits. A split mayonnaise can be rescued by whisking it slowly into a fresh yolk."
+      ]
+    },
+    {
+      "filename": "network_guide.pdf",
+      "pages": [
+        "Transport protocols\nTCP and UDP are the two main transport protocols on the internet. TCP opens a connection, numbers every segment and retransmits anything that is lost, so data arrives complete and in order. UDP simply sends datagrams without connections or retransmission, which makes it faster and lighter but unreliable. Video calls and online games often prefer UDP, while web pages, email and file transfers rely on TCP.",
+        "Name resolution\nThe Domain Name System translates names such as example.com into IP addresses. When you type a name, your computer asks a recursive resolver, which queries the root servers, then the top-level domain servers, and finally the domain's authoritative name server. The answer is cached for the record's time to live, so repeated lookups are fast.",
+        "Layers and wireless security\nThe OSI model describes networking in seven layers: physical, data link, network, transport, session, presentation and application. Each layer serves the one above it. For wireless networks, WPA3 is the current security standard; it replaces WPA2 and protects passwords against offline guessing attacks. Routers should also have their default admin password changed."
+      ]
+    }
+  ],
+  "questions": [
+    {"id": "q01", "type": "direct", "question": "What does a supervised model learn from?", "expected": {"filename": "ml_handbook.pdf", "page": 1}},
+    {"id": "q02", "type": "direct", "question": "How can I stop my model from overfitting?", "expected": {"filename": "ml_handbook.pdf", "page": 2}},
+    {"id": "q03", "type": "direct", "question": "How are the weights of a neural network updated?", "expected": {"filename": "ml_handbook.pdf", "page": 3}},
+    {"id": "q04", "type": "direct", "question": "How long should bread dough rise?", "expected": {"filename": "kitchen_notes.pdf", "page": 1}},
+    {"id": "q05", "type": "paraphrase", "question": "How do I avoid spreading germs when preparing raw chicken?", "expected": {"filename": "kitchen_notes.pdf", "page": 2}},
+    {"id": "q06", "type": "direct", "question": "Why did my mayonnaise split?", "expected": {"filename": "kitchen_notes.pdf", "page": 3}},
+    {"id": "q07", "type": "direct", "question": "What is the difference between TCP and UDP?", "expected": {"filename": "network_guide.pdf", "page": 1}},
+    {"id": "q08", "type": "paraphrase", "question": "How does my computer find the IP address behind a website name?", "expected": {"filename": "network_guide.pdf", "page": 2}},
+    {"id": "q09", "type": "shared-vocabulary", "question": "What are the seven layers of the OSI model?", "expected": {"filename": "network_guide.pdf", "page": 3}},
+    {"id": "q10", "type": "shared-vocabulary", "question": "How many sponge layers does a layer cake have?", "expected": {"filename": "kitchen_notes.pdf", "page": 3}},
+    {"id": "q11", "type": "shared-vocabulary", "question": "What do the hidden layers of a neural network do?", "expected": {"filename": "ml_handbook.pdf", "page": 3}},
+    {"id": "q12", "type": "shared-vocabulary", "question": "How is a trained model evaluated on new data?", "expected": {"filename": "ml_handbook.pdf", "page": 1}},
+    {"id": "q13", "type": "unanswerable", "question": "What is the capital of Australia?", "expected": null},
+    {"id": "q14", "type": "unanswerable", "question": "How do I file my taxes in Germany?", "expected": null},
+    {"id": "q15", "type": "unanswerable-adjacent", "question": "Which GPU is best for training large language models?", "expected": null}
+  ]
+}

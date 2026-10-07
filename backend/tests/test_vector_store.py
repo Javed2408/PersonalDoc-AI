@@ -165,3 +165,42 @@ def test_wrong_vector_dimension_is_rejected(store):
 def test_mismatched_lengths_are_rejected(store):
     with pytest.raises(ValueError):
         store.upsert_chunks(make_chunks(DOC_A, 2), [fake.vector("only one")])
+
+
+# --- Nearest-neighbour query (used by the retriever) --------------------------
+
+
+def test_query_nearest_returns_closest_first_with_metadata(store):
+    a, b = make_chunks(DOC_A, 3), make_chunks(DOC_B, 2)
+    store.upsert_chunks(a, vectors(a))
+    store.upsert_chunks(b, vectors(b))
+
+    hits = store.query_nearest(fake.vector("text 1"), 3, [DOC_A, DOC_B])
+
+    assert len(hits) == 3
+    assert hits[0].chunk_id == f"{DOC_A}-00001"  # Identical text -> identical vector
+    assert hits[0].distance == pytest.approx(0.0, abs=1e-5)
+    assert hits[0].text == "text 1"
+    assert hits[0].metadata["page_number"] == 1
+    assert [h.distance for h in hits] == sorted(h.distance for h in hits)
+
+
+def test_query_nearest_respects_document_filter(store):
+    a, b = make_chunks(DOC_A, 3), make_chunks(DOC_B, 2)
+    store.upsert_chunks(a, vectors(a))
+    store.upsert_chunks(b, vectors(b))
+
+    hits = store.query_nearest(fake.vector("text 1"), 10, [DOC_B])
+
+    assert {h.metadata["document_id"] for h in hits} == {DOC_B}
+    assert len(hits) == 2  # Fewer than requested: only what exists
+
+
+def test_query_nearest_with_no_documents_or_empty_collection(store):
+    assert store.query_nearest(fake.vector("x"), 4, []) == []
+    assert store.query_nearest(fake.vector("x"), 4, [DOC_A]) == []
+
+
+def test_query_nearest_rejects_invalid_n_results(store):
+    with pytest.raises(ValueError):
+        store.query_nearest(fake.vector("x"), 0, [DOC_A])

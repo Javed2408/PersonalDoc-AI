@@ -49,6 +49,14 @@ class Settings(BaseSettings):
     chroma_dir: Path | None = None
     chroma_collection: str = "personaldoc_chunks"
 
+    # Retrieval. RETRIEVAL_TOP_K is the default number of chunks returned per query;
+    # requests may ask for up to RETRIEVAL_MAX_K.
+    retrieval_top_k: int = Field(default=4, ge=1)
+    retrieval_max_k: int = Field(default=20, ge=1, le=100)
+    # Optional cut-off on cosine distance (0 = same direction, 1 = unrelated, 2 = opposite).
+    # Off by default: a sensible value must come from evaluation (Phase 9), not a guess.
+    retrieval_max_distance: float | None = Field(default=None, gt=0, le=2)
+
     @field_validator("cors_origins", mode="before")
     @classmethod
     def split_origins(cls, value: object) -> object:
@@ -68,9 +76,9 @@ class Settings(BaseSettings):
             return value
         return (BACKEND_DIR / value).resolve()
 
-    @field_validator("embedding_device", mode="before")
+    @field_validator("embedding_device", "retrieval_max_distance", mode="before")
     @classmethod
-    def blank_device_means_auto(cls, value: object) -> object:
+    def blank_means_unset(cls, value: object) -> object:
         return None if isinstance(value, str) and not value.strip() else value
 
     @field_validator("chroma_collection")
@@ -87,6 +95,12 @@ class Settings(BaseSettings):
     def check_chunk_overlap(self) -> "Settings":
         if self.chunk_overlap >= self.chunk_size:
             raise ValueError("CHUNK_OVERLAP must be smaller than CHUNK_SIZE")
+        return self
+
+    @model_validator(mode="after")
+    def check_retrieval_k(self) -> "Settings":
+        if self.retrieval_top_k > self.retrieval_max_k:
+            raise ValueError("RETRIEVAL_TOP_K must not exceed RETRIEVAL_MAX_K")
         return self
 
     @model_validator(mode="after")

@@ -95,3 +95,32 @@ def test_embedding_settings_from_env(monkeypatch):
 def test_invalid_embedding_settings_are_rejected(overrides):
     with pytest.raises(ValidationError):
         Settings(_env_file=None, **overrides)
+
+
+def test_retrieval_defaults_and_env(monkeypatch):
+    settings = Settings(_env_file=None)
+    assert (settings.retrieval_top_k, settings.retrieval_max_k, settings.retrieval_max_distance) == (4, 20, None)
+
+    monkeypatch.setenv("RETRIEVAL_TOP_K", "6")
+    monkeypatch.setenv("RETRIEVAL_MAX_K", "30")
+    monkeypatch.setenv("RETRIEVAL_MAX_DISTANCE", "0.65")
+    settings = Settings(_env_file=None)
+    assert (settings.retrieval_top_k, settings.retrieval_max_k, settings.retrieval_max_distance) == (6, 30, 0.65)
+
+    monkeypatch.setenv("RETRIEVAL_MAX_DISTANCE", "")
+    assert Settings(_env_file=None).retrieval_max_distance is None
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"retrieval_top_k": 0},
+        {"retrieval_top_k": 25, "retrieval_max_k": 20},
+        {"retrieval_max_k": 101},
+        {"retrieval_max_distance": 0},
+        {"retrieval_max_distance": 2.5},
+    ],
+)
+def test_invalid_retrieval_settings_are_rejected(overrides):
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, **overrides)

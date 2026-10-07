@@ -40,3 +40,38 @@ class FakeEmbedder:
         raw = [digest[i % len(digest)] / 255 - 0.5 for i in range(self._dimension)]
         norm = math.sqrt(sum(value * value for value in raw)) or 1.0
         return [value / norm for value in raw]
+
+
+TOPIC_VOCABULARY = (
+    # machine learning
+    "machine", "learning", "model", "models", "training", "data", "gradient", "neural",
+    # cooking
+    "bread", "dough", "oven", "flour", "yeast", "bake", "recipe", "knead",
+    # networking
+    "router", "routers", "packets", "tcp", "dns", "protocol", "latency", "bandwidth",
+)
+
+
+class TopicEmbedder:
+    """Deterministic keyword-count embeddings: texts sharing vocabulary end up close.
+
+    Gives ranking tests real meaning without loading the real model.
+    """
+
+    model_name = "test/topic-embedder"
+    dimension = len(TOPIC_VOCABULARY) + 1
+
+    def __init__(self) -> None:
+        self.calls: list[list[str]] = []
+
+    def embed(self, texts: Sequence[str]) -> list[list[float]]:
+        items = validate_texts(texts)
+        self.calls.append(items)
+        return [self.vector(text) for text in items]
+
+    def vector(self, text: str) -> list[float]:
+        words = [word.strip(".,;:!?()\"'").lower() for word in text.split()]
+        raw = [float(words.count(term)) for term in TOPIC_VOCABULARY]
+        raw.append(0.05)  # Never a zero vector, even for off-topic text
+        norm = math.sqrt(sum(value * value for value in raw))
+        return [value / norm for value in raw]
