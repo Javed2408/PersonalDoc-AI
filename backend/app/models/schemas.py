@@ -104,3 +104,41 @@ class RetrievalResponse(BaseModel):
     document_ids: list[str] | None
     result_count: int
     results: list[RetrievalResult]
+
+
+class ChatRequest(BaseModel):
+    question: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2000)]
+    # Number of chunks to retrieve. Omitted: the configured default (RETRIEVAL_TOP_K).
+    k: int | None = Field(default=None, ge=1)
+    # Omitted or empty: all processed documents. Same semantics as /api/retrieval/search.
+    document_ids: list[DocumentId] | None = Field(default=None, max_length=100)
+
+    @field_validator("document_ids")
+    @classmethod
+    def dedupe_document_ids(cls, value: list[str] | None) -> list[str] | None:
+        return list(dict.fromkeys(value)) if value else None
+
+
+class ChatSource(BaseModel):
+    """A retrieved chunk that was given to the model. Copied from retrieval, never generated."""
+
+    label: str  # "Source N", as the answer may cite it
+    chunk_id: str
+    document_id: str
+    original_filename: str
+    page_number: int
+    chunk_index: int
+    text: str
+    distance: float
+    similarity: float
+
+
+class ChatResponse(BaseModel):
+    question: str
+    answer: str
+    # "answered": the model answered from the sources.
+    # "not_found": no sufficient evidence (retrieval found nothing close enough, or the
+    #              model reported the documents don't contain the answer). No sources then.
+    status: Literal["answered", "not_found"]
+    model: str
+    sources: list[ChatSource]

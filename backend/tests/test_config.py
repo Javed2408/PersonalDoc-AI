@@ -124,3 +124,46 @@ def test_retrieval_defaults_and_env(monkeypatch):
 def test_invalid_retrieval_settings_are_rejected(overrides):
     with pytest.raises(ValidationError):
         Settings(_env_file=None, **overrides)
+
+
+def test_llm_and_rag_defaults():
+    settings = Settings(_env_file=None)
+
+    assert settings.ollama_base_url == "http://127.0.0.1:11434"
+    assert settings.ollama_model == "llama3.2:3b"
+    assert (settings.llm_temperature, settings.llm_max_tokens, settings.llm_context_window) == (0.0, 512, 4096)
+    assert settings.llm_timeout_seconds == 120
+    assert (settings.rag_max_distance, settings.rag_max_context_chars) == (0.7, 6000)
+
+
+def test_llm_settings_from_env(monkeypatch):
+    monkeypatch.setenv("OLLAMA_BASE_URL", " http://gpu-box.local:11434/ ")
+    monkeypatch.setenv("OLLAMA_MODEL", "mistral")
+    monkeypatch.setenv("LLM_TEMPERATURE", "0.2")
+    monkeypatch.setenv("RAG_MAX_DISTANCE", "0.6")
+    monkeypatch.setenv("RAG_MAX_CONTEXT_CHARS", "8000")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.ollama_base_url == "http://gpu-box.local:11434"
+    assert settings.ollama_model == "mistral"
+    assert settings.llm_temperature == 0.2
+    assert (settings.rag_max_distance, settings.rag_max_context_chars) == (0.6, 8000)
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"ollama_base_url": "localhost:11434"},
+        {"ollama_model": ""},
+        {"llm_temperature": -0.1},
+        {"llm_max_tokens": 0},
+        {"llm_timeout_seconds": 0},
+        {"rag_max_distance": 0},
+        {"rag_max_distance": 2.5},
+        {"rag_max_context_chars": 10},
+    ],
+)
+def test_invalid_llm_settings_are_rejected(overrides):
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, **overrides)

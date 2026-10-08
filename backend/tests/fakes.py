@@ -75,3 +75,31 @@ class TopicEmbedder:
         raw.append(0.05)  # Never a zero vector, even for off-topic text
         norm = math.sqrt(sum(value * value for value in raw))
         return [value / norm for value in raw]
+
+
+class FakeLLM:
+    """Deterministic stand-in for Ollama. Records every prompt it receives.
+
+    `reply` is a fixed answer or a function (system, user) -> answer; set `error` to make
+    every call raise it (e.g. LLMUnavailableError).
+    """
+
+    def __init__(self, reply="The documents say so. [Source 1]", model_name: str = "test/fake-llm") -> None:
+        self._model_name = model_name
+        self.reply = reply
+        self.error: Exception | None = None
+        self.calls: list[tuple[str, str]] = []
+
+    @property
+    def model_name(self) -> str:
+        return self._model_name
+
+    @property
+    def last_user_prompt(self) -> str:
+        return self.calls[-1][1]
+
+    def generate(self, system: str, user: str) -> str:
+        self.calls.append((system, user))
+        if self.error:
+            raise self.error
+        return self.reply(system, user) if callable(self.reply) else self.reply

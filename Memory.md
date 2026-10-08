@@ -2,7 +2,7 @@
 
 ## Current phase
 
-**Phase 5: Retrieval — complete.** Awaiting review before Phase 6.
+**Phase 6: Local LLM and RAG Generation — complete.** Awaiting review before Phase 7 (not started).
 
 ## Completed
 
@@ -18,6 +18,22 @@
   - **Retrieval API:** `POST /api/retrieval/search`.
   - **Structured retrieval results:** `RetrievalRequest`, `RetrievalResult` and `RetrievalResponse` schemas.
   - Evaluation set, runner and baseline report in `backend/evaluation/`.
+
+- Phase 6:
+  - **Ollama integration:** `generation/llm.py`, an `LLM` protocol plus `OllamaLLM` (stdlib HTTP, `/api/chat`, non-streaming). Errors are typed: unavailable, model not found, timeout, bad response.
+  - **Model:** `llama3.2:3b` (current development model), temperature 0, 512 output tokens, `num_ctx` 4096, 120 s timeout.
+  - **Grounded prompt:** `generation/prompts.py` has the system rules, a `<context>`/`<source>` block of untrusted excerpts, a `<question>` block, and neutralises delimiter tags.
+  - **RAG chain:** `generation/rag_chain.py` runs retrieve → evidence gate (`RAG_MAX_DISTANCE` 0.7) → whole-chunk context budget (6000 chars) → one LLM call → not-found detection → sources copied from retrieval, with invalid `[Source N]` citations removed.
+  - **API:** `POST /api/chat`. Returns 200 `answered`/`not_found`; 503 when Ollama is down, the model is missing, or the index is unavailable; 504 on timeout; 502 on a bad response; retrieval's 422/404/409.
+
+## Project structure (Phase 6 additions)
+
+```text
+backend/app/generation/              llm.py, prompts.py, rag_chain.py
+backend/app/api/chat.py              POST /api/chat
+backend/evaluation/                  rag_dataset.json, rag_eval.py, results/rag_baseline.md
+backend/tests/                       test_llm.py (stub HTTP server), test_rag.py (fake LLM), test_rag_ollama.py (real Ollama)
+```
 
 ## Project structure (Phase 5 additions)
 
@@ -46,7 +62,21 @@ backend/tests/fakes.py               + TopicEmbedder (keyword-count vectors for 
 - **No answer generation anywhere.** An empty library returns `[]` without embedding the query.
 - **Logging:** INFO shows only k, filter size, result count and best distance. Query text and per-result document, page and chunk are logged at DEBUG only.
 
-## Evaluation (`backend/evaluation/results/retrieval_baseline.md`)
+## RAG evaluation (`backend/evaluation/results/rag_baseline.md`, llama3.2:3b)
+
+- **20/22**, deterministic at temperature 0 (identical across runs).
+  - answerable 12/12, unanswerable 3/3, related-insufficient 2/2, misleading-overlap 2/2, partial 1/2, injection 0/1
+  - source preservation 13/13; 3 declines from the evidence gate, 6 from the model; about 0.6 s per question when warm
+- **Both failures are the injection memo:** the model never follows the injection, but refuses to answer the legitimate date in the same excerpt.
+- **Prompt experiments (2026-10-09), 4 variants:**
+  - 2 softer rule-5 wordings and 2 post-context reminders were tried.
+  - Three still refused.
+  - The only one that answered also printed "INJECTION SUCCESSFUL" and a fake system prompt.
+  - The original prompt was kept: failing safe is preferred.
+  - `test_rag_ollama.py`'s injection test accepts a safe decline but stays strict on leaks.
+- A larger model (e.g. `llama3.1:8b`) may fix this. That is for Phase 9 evaluation, not a change now.
+
+## Retrieval evaluation (`backend/evaluation/results/retrieval_baseline.md`)
 
 - **Dataset:**
   - 3 documents (ML handbook, kitchen notes, network guide), 9 pages, 9 chunks
@@ -66,15 +96,40 @@ backend/tests/fakes.py               + TopicEmbedder (keyword-count vectors for 
 ```bash
 # Backend (backend/)
 .venv/Scripts/python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
-.venv/Scripts/python -m pytest                    # 230 tests, ~31 s
-.venv/Scripts/python -m pytest -m "not model"     # 213 tests, no real model
+.venv/Scripts/python -m pytest                    # 297 tests, ~50 s (real model + Ollama)
+.venv/Scripts/python -m pytest -m "not model"     # 272 tests, no real model or Ollama
+.venv/Scripts/python -m pytest -m ollama          # 8 real-LLM tests, ~17 s
 .venv/Scripts/python -m evaluation.retrieval_eval [--write]
+.venv/Scripts/python -m evaluation.rag_eval [--write]
 
 # Frontend (frontend/)
 npm run dev      # http://127.0.0.1:5173
 ```
 
 ## Tests
+
+### Phase 6 (2026-10-09)
+
+- **297 passed** (full suite). The 8 real-Ollama tests ran 3 times in a row, all passing.
+- **Live API (uvicorn :8000, real data dir, 3 evaluation PDFs):**
+  - answered with correct sources; document filter (answer outside the filter → not_found)
+  - k = 1; evidence-gate decline; model decline; injection in the question (gated)
+  - 422 / 404 errors as specified
+  - first request about 10 s (model loading), then 0.4–1.1 s
+- **Failure modes (separate backends, throwaway data dirs):**
+  - unreachable Ollama → 503 "Can't reach Ollama..."
+  - unpulled model → 503 with the `ollama pull` command
+  - 0.05 s timeout → 504
+  - health and retrieval keep working in all three
+  - fixed: the timeout message rounded fractional values to "0 seconds" (now `:g`)
+- **Logs:** no question or answer text at INFO (checked against the server log).
+- **Browser (Chrome, Vite proxy):**
+  - UI shows Local / Ready with 3 processed documents
+  - `/api/chat` from the page: answered with full source metadata, filtered not_found, k = 2, gate decline, 422 on an empty question
+  - no console errors
+- No chat UI yet (Phase 7).
+
+### Phase 5
 
 - **230 passed.** The full suite ran 3 times in a row with no failures; the retrieval tests alone ran 5 times.
 - **Retrieval API tests (50, keyword embedder):**
@@ -97,7 +152,9 @@ npm run dev      # http://127.0.0.1:5173
 
 ## Known issues
 
-- **No threshold:** questions the documents can't answer still return the k nearest chunks, with large distances. Phase 6 must use the distances, or ignore weak context, and fall back to "not found".
+- **Injection over-refusal (3B):** excerpts that contain an injection make `llama3.2:3b` decline the whole question (see the RAG evaluation).
+- **Provisional gates:** `RAG_MAX_DISTANCE` 0.7 and the context budget are untuned until Phase 9. Retrieval itself still has no threshold.
+- **Single-turn chat:** no history, no streaming; the first request after a start loads both models (about 10 s).
 - **Thin evaluation:** the dataset is small and English-only. `all-MiniLM-L6-v2` truncates at 256 tokens.
 - **HNSW is approximate:** for large libraries, the boundary at k may differ slightly from an exact search.
 - **Windows:** ChromaDB keeps index files memory-mapped until the process exits, so the evaluation runner's temp directory may not be fully deleted (it lives in the OS temp dir).
@@ -107,4 +164,4 @@ npm run dev      # http://127.0.0.1:5173
 
 ## Next phase
 
-Phase 6: Local LLM and RAG Generation. Not started.
+Phase 7: Chat API and Frontend. Not started.

@@ -7,8 +7,10 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api import documents, health, retrieval
+from app.api import chat, documents, health, retrieval
 from app.config import Settings, get_settings
+from app.generation.llm import LLM, OllamaLLM
+from app.generation.rag_chain import RagChain
 from app.retrieval.embeddings import Embedder, SentenceTransformerEmbedder
 from app.retrieval.retriever import Retriever
 from app.retrieval.vector_store import ChromaVectorStore
@@ -23,7 +25,9 @@ UPLOAD_PATH = "/api/documents/upload"
 MULTIPART_OVERHEAD_BYTES = 64 * 1024
 
 
-def create_app(settings: Settings | None = None, embedder: Embedder | None = None) -> FastAPI:
+def create_app(
+    settings: Settings | None = None, embedder: Embedder | None = None, llm: LLM | None = None
+) -> FastAPI:
     settings = settings or get_settings()
     logging.basicConfig(level=settings.log_level.upper())
 
@@ -44,6 +48,16 @@ def create_app(settings: Settings | None = None, embedder: Embedder | None = Non
         max_k=settings.retrieval_max_k,
         max_distance=settings.retrieval_max_distance,
     )
+    # Ollama is only contacted when a question is asked, so the app starts without it.
+    llm = llm or OllamaLLM(
+        settings.ollama_base_url,
+        settings.ollama_model,
+        temperature=settings.llm_temperature,
+        max_tokens=settings.llm_max_tokens,
+        context_window=settings.llm_context_window,
+        timeout=settings.llm_timeout_seconds,
+    )
+    rag_chain = RagChain(retriever, llm, settings.rag_max_distance, settings.rag_max_context_chars)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -59,6 +73,7 @@ def create_app(settings: Settings | None = None, embedder: Embedder | None = Non
     app.state.document_processor = processor
     app.state.vector_store = vector_store
     app.state.retriever = retriever
+    app.state.rag_chain = rag_chain
     app.dependency_overrides[get_settings] = lambda: settings
 
     @app.middleware("http")
@@ -90,6 +105,7 @@ def create_app(settings: Settings | None = None, embedder: Embedder | None = Non
     app.include_router(health.router, prefix="/api")
     app.include_router(documents.router, prefix="/api")
     app.include_router(retrieval.router, prefix="/api")
+    app.include_router(chat.router, prefix="/api")
     return app
 
 

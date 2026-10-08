@@ -57,6 +57,25 @@ class Settings(BaseSettings):
     # Off by default: a sensible value must come from evaluation (Phase 9), not a guess.
     retrieval_max_distance: float | None = Field(default=None, gt=0, le=2)
 
+    # Local LLM (Ollama). Nothing is sent anywhere else.
+    ollama_base_url: str = "http://127.0.0.1:11434"
+    ollama_model: str = Field(default="llama3.2:3b", min_length=1)
+    # Factual QA: no creativity wanted.
+    llm_temperature: float = Field(default=0.0, ge=0, le=2)
+    llm_max_tokens: int = Field(default=512, ge=16, le=8192)
+    # Model context window in tokens. Must hold instructions + context + question + answer;
+    # Ollama silently truncates prompts that don't fit, which would drop evidence.
+    llm_context_window: int = Field(default=4096, ge=1024, le=131072)
+    llm_timeout_seconds: float = Field(default=120.0, gt=0, le=600)
+
+    # RAG. Retrieved chunks farther than RAG_MAX_DISTANCE (cosine distance) are not treated
+    # as evidence; with none left, the answer is "not found" and the LLM is not called.
+    # 0.7 = cosine similarity below 0.3, where all-MiniLM-L6-v2 texts are typically unrelated.
+    # Provisional and conservative: tune with the Phase 9 evaluation.
+    rag_max_distance: float = Field(default=0.7, gt=0, le=2)
+    # Budget for document text in the prompt (complete chunks are kept; see rag_chain.py).
+    rag_max_context_chars: int = Field(default=6000, ge=500, le=200_000)
+
     @field_validator("cors_origins", mode="before")
     @classmethod
     def split_origins(cls, value: object) -> object:
@@ -102,6 +121,14 @@ class Settings(BaseSettings):
         if self.retrieval_top_k > self.retrieval_max_k:
             raise ValueError("RETRIEVAL_TOP_K must not exceed RETRIEVAL_MAX_K")
         return self
+
+    @field_validator("ollama_base_url")
+    @classmethod
+    def check_ollama_url(cls, value: str) -> str:
+        value = value.strip().rstrip("/")
+        if not value.startswith(("http://", "https://")):
+            raise ValueError("OLLAMA_BASE_URL must start with http:// or https://")
+        return value
 
     @model_validator(mode="after")
     def default_chroma_dir(self) -> "Settings":

@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 
 from app.config import Settings
 from app.main import create_app
-from tests.fakes import FakeEmbedder
+from tests.fakes import FakeEmbedder, FakeLLM
 
 MINIMAL_PDF = (
     b"%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n"
@@ -31,13 +31,20 @@ def embedder() -> FakeEmbedder:
 
 
 @pytest.fixture
-def make_client(make_settings, embedder) -> Iterator[Callable[..., TestClient]]:
+def llm() -> FakeLLM:
+    return FakeLLM()
+
+
+@pytest.fixture
+def make_client(make_settings, embedder, llm) -> Iterator[Callable[..., TestClient]]:
     """Apps share one temp data dir (so a second client acts as a restart) and, by default,
-    the fast fake embedder. Pass embedder=... to use another one."""
+    the fast fake embedder and fake LLM. Pass embedder_override / llm_override to swap them."""
     clients: list[TestClient] = []
 
-    def factory(embedder_override=None, **overrides) -> TestClient:
-        app = create_app(make_settings(**overrides), embedder=embedder_override or embedder)
+    def factory(embedder_override=None, llm_override=None, **overrides) -> TestClient:
+        app = create_app(
+            make_settings(**overrides), embedder=embedder_override or embedder, llm=llm_override or llm
+        )
         client = TestClient(app)
         client.__enter__()  # run lifespan startup
         clients.append(client)
