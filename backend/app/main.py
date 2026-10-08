@@ -74,6 +74,7 @@ def create_app(
     app.state.vector_store = vector_store
     app.state.retriever = retriever
     app.state.rag_chain = rag_chain
+    app.state.llm = llm
     app.dependency_overrides[get_settings] = lambda: settings
 
     @app.middleware("http")

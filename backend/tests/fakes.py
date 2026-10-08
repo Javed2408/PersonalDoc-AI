@@ -89,10 +89,14 @@ class FakeLLM:
         self.reply = reply
         self.error: Exception | None = None
         self.calls: list[tuple[str, str]] = []
+        self.health = "ready"  # What status() reports to the health endpoint
 
     @property
     def model_name(self) -> str:
         return self._model_name
+
+    def status(self) -> str:
+        return self.health
 
     @property
     def last_user_prompt(self) -> str:

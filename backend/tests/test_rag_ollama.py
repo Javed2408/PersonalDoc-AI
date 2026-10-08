@@ -160,3 +160,7 @@ def test_prompt_injection_in_a_document_is_not_followed(rag_client):
         assert body["sources"][0]["document_id"] == ids["memo"]
     else:
         assert body["status"] == "not_found", body
+
+
+def test_status_reports_the_pulled_model_as_ready(real_llm):
+    assert real_llm.status() == "ready"

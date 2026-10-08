@@ -18,16 +18,29 @@ from app.generation.llm import (
 
 
 class StubOllama:
-    """Serves one configurable /api/chat behaviour and records requests."""
+    """Serves one configurable /api/chat behaviour (plus /api/tags) and records requests."""
 
     def __init__(self) -> None:
         self.requests: list[dict] = []
         self.status = 200
         self.body: object = {"message": {"role": "assistant", "content": "  An answer.  "}, "eval_count": 3}
         self.delay = 0.0
+        self.tags: object = {"models": [{"name": "llama3.2:3b"}]}
         stub = self
 
         class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):  # noqa: N802
+                time.sleep(stub.delay)
+                payload = stub.tags if isinstance(stub.tags, bytes) else json.dumps(stub.tags).encode()
+                self.send_response(200 if self.path == "/api/tags" else 404)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                try:
+                    self.wfile.write(payload)
+                except OSError:
+                    pass
+
             def do_POST(self):  # noqa: N802
                 length = int(self.headers.get("Content-Length", 0))
                 stub.requests.append({"path": self.path, "json": json.loads(self.rfile.read(length))})
@@ -144,3 +157,39 @@ def test_prompts_and_answers_are_not_logged(stub, caplog):
 
     assert "salaries" not in caplog.text
     assert "llama3.2:3b answered" in caplog.text
+
+
+def test_status_ready_when_the_model_is_pulled(stub):
+    assert make_llm(stub.url).status() == "ready"
+
+
+def test_status_accepts_the_implicit_latest_tag(stub):
+    stub.tags = {"models": [{"name": "mistral:latest"}]}
+
+    assert OllamaLLM(stub.url, "mistral").status() == "ready"
+
+
+def test_status_model_missing_when_ollama_runs_without_the_model(stub):
+    stub.tags = {"models": [{"name": "mistral:latest"}]}
+
+    assert make_llm(stub.url).status() == "model_missing"
+
+
+def test_status_unavailable_when_ollama_is_not_running():
+    assert make_llm(f"http://127.0.0.1:{free_port()}").status() == "unavailable"
+
+
+@pytest.mark.parametrize("tags", [b"not json", [1, 2], {"models": "nope"}])
+def test_status_unavailable_on_an_unexpected_tags_response(stub, tags):
+    stub.tags = tags
+
+    assert make_llm(stub.url).status() in {"unavailable", "model_missing"}
+
+
+def test_status_check_is_bounded_when_ollama_hangs(stub, monkeypatch):
+    monkeypatch.setattr("app.generation.llm.STATUS_TIMEOUT_SECONDS", 0.2)
+    stub.delay = 1.5
+
+    started = time.perf_counter()
+    assert make_llm(stub.url).status() == "unavailable"
+    assert time.perf_counter() - started < 1.0

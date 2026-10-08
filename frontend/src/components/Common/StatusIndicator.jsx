@@ -1,14 +1,9 @@
-const LABELS = {
-  loading: 'Checking…',
-  ok: 'Local / Ready',
-  error: 'Backend offline',
-}
-
-export default function StatusIndicator({ status }) {
+// The text label accompanies the colour, so status never relies on colour alone.
+export default function StatusIndicator({ tone, label, title }) {
   return (
-    <span className={`status-indicator status-indicator--${status}`}>
+    <span className={`status-indicator status-indicator--${tone}`} title={title}>
       <span className="status-indicator__dot" aria-hidden="true" />
-      {LABELS[status]}
+      {label}
     </span>
   )
 }

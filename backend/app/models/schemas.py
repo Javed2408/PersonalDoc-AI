@@ -6,11 +6,19 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, Field, StringConstraints, field_validator
 
 
+class LLMHealth(BaseModel):
+    # "ready": Ollama is up and the model is pulled. "unavailable": Ollama can't be reached.
+    # "model_missing": Ollama is up but the configured model isn't pulled.
+    status: Literal["ready", "unavailable", "model_missing"]
+    model: str
+
+
 class HealthResponse(BaseModel):
-    status: Literal["ok"]
+    status: Literal["ok"]  # The backend itself; the local LLM is reported separately.
     app_name: str
     version: str
     environment: str
+    llm: LLMHealth
 
 
 # uploaded -> processing -> processed | failed.

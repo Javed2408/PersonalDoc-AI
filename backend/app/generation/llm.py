@@ -10,9 +10,12 @@ import socket
 import time
 import urllib.error
 import urllib.request
-from typing import Protocol
+from typing import Literal, Protocol
 
 logger = logging.getLogger(__name__)
+
+# The health check must stay fast even when Ollama hangs.
+STATUS_TIMEOUT_SECONDS = 2.0
 
 
 class LLMError(Exception):
@@ -35,11 +38,17 @@ class LLMTimeoutError(LLMError):
     """The model didn't answer within the configured timeout."""
 
 
+# Reported by LLM.status(): can a question be answered right now?
+LLMStatus = Literal["ready", "unavailable", "model_missing"]
+
+
 class LLM(Protocol):
     @property
     def model_name(self) -> str: ...
 
     def generate(self, system: str, user: str) -> str: ...
+
+    def status(self) -> LLMStatus: ...
 
 
 class OllamaLLM:
@@ -83,6 +92,18 @@ class OllamaLLM:
             self._model, time.perf_counter() - started, body.get("prompt_eval_count"), body.get("eval_count"),
         )
         return content.strip()
+
+    def status(self) -> LLMStatus:
+        """Cheap availability check for the health endpoint: is Ollama up, and is the model pulled?"""
+        try:
+            with urllib.request.urlopen(self._base_url + "/api/tags", timeout=STATUS_TIMEOUT_SECONDS) as response:
+                body = json.loads(response.read())
+            names = {model.get("name") for model in body.get("models", []) if isinstance(model, dict)}
+        except (OSError, ValueError, AttributeError) as error:  # URLError and timeouts are OSErrors
+            logger.debug("Ollama status check failed: %s", error)
+            return "unavailable"
+        # Ollama lists untagged pulls as "<name>:latest".
+        return "ready" if self._model in names or f"{self._model}:latest" in names else "model_missing"
 
     def _post(self, path: str, payload: dict) -> dict:
         request = urllib.request.Request(

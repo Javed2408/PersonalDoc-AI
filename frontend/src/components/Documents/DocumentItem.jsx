@@ -14,26 +14,45 @@ function plural(count, word) {
   return `${count} ${word}${count === 1 ? '' : 's'}`
 }
 
-export default function DocumentItem({ document, deletion, onDelete }) {
+export default function DocumentItem({ document, deletion, onDelete, selected, onToggle }) {
   const [confirming, setConfirming] = useState(false)
   const deleting = deletion?.status === 'deleting'
   const name = document.original_filename
+  const id = document.document_id
+  // Only processed documents are in the vector index, so only they can be chat context.
+  const selectable = document.status === 'processed' && !deleting
+
+  const classes = ['doc-item']
+  if (selected) classes.push('doc-item--selected')
+  if (document.status !== 'processed') classes.push('doc-item--unavailable')
 
   return (
-    <li className="doc-item" aria-busy={deleting}>
-      <Icon name="file" size={18} />
+    <li className={classes.join(' ')} aria-busy={deleting}>
+      <input
+        id={`doc-select-${id}`}
+        type="checkbox"
+        className="doc-item__check"
+        checked={selected}
+        disabled={!selectable}
+        aria-label={`Ask about ${name}`}
+        aria-describedby={`doc-status-${id}`}
+        onChange={() => onToggle(id)}
+      />
       <div className="doc-item__body">
-        <span className="doc-item__name" title={name}>
+        <label htmlFor={`doc-select-${id}`} className="doc-item__name" title={name}>
           {name}
-        </span>
+        </label>
         <span className="doc-item__meta">
           {document.file_type.toUpperCase()} · {formatBytes(document.file_size)} · {formatDate(document.created_at)}
         </span>
-        <span className="doc-item__status">
+        <span className="doc-item__status" id={`doc-status-${id}`}>
           <span className={`badge badge--${document.status}`}>
             {document.status === 'processing' && <span className="spinner" aria-hidden="true" />}
             {STATUS_LABELS[document.status] ?? document.status}
           </span>
+          {(document.status === 'uploaded' || document.status === 'processing') && (
+            <span className="doc-item__meta">Available for chat once processed</span>
+          )}
           {document.status === 'processed' && document.page_count != null && (
             <span className="doc-item__meta">
               {plural(document.page_count, 'page')} · {plural(document.chunk_count, 'chunk')}

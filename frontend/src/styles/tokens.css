@@ -22,7 +22,13 @@
   --space-6: 24px;
   --space-8: 32px;
 
+  --color-accent-soft: rgb(99 230 190 / 0.1);
+  --color-error-soft: rgb(255 107 107 / 0.08);
+  --color-warning-soft: rgb(255 209 102 / 0.08);
+
   --sidebar-width: 300px;
+  --header-height: 56px;
+  --chat-width: 760px;
   --transition: 150ms ease;
 
   color-scheme: dark;

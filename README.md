@@ -2,7 +2,7 @@
 
 A privacy-first, local RAG application for chatting with your personal documents using a locally running LLM.
 
-> **Status:** Phase 6 (local LLM and RAG generation). Uploaded PDFs are processed in the background: text is extracted page by page, chunked, embedded with a local model and stored in a local ChromaDB index. `POST /api/chat` retrieves the most relevant chunks and has a local Ollama model answer **only from them**, returning the answer with its sources, or a clear "not found". Everything stays on your machine. The chat UI comes in Phase 7 (see [Phases.md](Phases.md)).
+> **Status:** Phase 7 (chat UI). Upload PDFs, choose which ones to ask about (or all of them), and chat with them in the browser. Each answer comes from a local Ollama model, **only from the retrieved passages**, and lists the pages it's based on, or says clearly that the documents don't contain the answer. Everything stays on your machine. Next: Phase 8, citations and document UX (see [Phases.md](Phases.md)).
 
 ## Project documents
 
@@ -59,10 +59,11 @@ PersonalDoc-AI/
 │   └── .env.example
 └── frontend/                React + Vite application
     ├── src/
-    │   ├── components/      Layout/, Common/ and Documents/ components
-    │   ├── hooks/           useHealth.js, useDocuments.js
-    │   ├── utils/format.js  Byte and date formatting
+    │   ├── components/      Layout/, Common/, Documents/, Chat/ and Sources/ components
+    │   ├── hooks/           useHealth, useDocuments, useDocumentSelection, useChat
+    │   ├── utils/           Formatting, answer text, source grouping, error and status wording
     │   ├── services/api.js  All HTTP calls go through here
+    │   ├── test/            Test setup and a fake backend for the frontend tests
     │   ├── styles/          Design tokens and global styles
     │   ├── App.jsx
     │   └── main.jsx
@@ -106,7 +107,8 @@ Check it:
 
 ```bash
 curl http://127.0.0.1:8000/api/health
-# {"status":"ok","app_name":"PersonalDoc AI","version":"0.1.0","environment":"development"}
+# {"status":"ok","app_name":"PersonalDoc AI","version":"0.1.0","environment":"development",
+#  "llm":{"status":"ready","model":"llama3.2:3b"}}
 ```
 
 Interactive API docs are at http://127.0.0.1:8000/docs.
@@ -115,7 +117,7 @@ Interactive API docs are at http://127.0.0.1:8000/docs.
 
 | Method | Path | Description |
 | --- | --- | --- |
-| `GET` | `/api/health` | Backend status |
+| `GET` | `/api/health` | Backend status, plus whether the local model can answer (`llm.status`: `ready`, `unavailable` or `model_missing`) |
 | `GET` | `/api/documents` | List stored documents, newest first |
 | `POST` | `/api/documents/upload` | Upload one PDF (multipart field `file`). Returns `201` with metadata |
 | `GET` | `/api/documents/{document_id}/chunks` | Extracted text chunks of a processed document |
@@ -348,7 +350,21 @@ npm install
 npm run dev
 ```
 
-Open http://localhost:5173. The header and the Backend card show **Local / Ready** when the API is reachable. When it isn't, they show **Backend offline** with a retry button.
+Open http://127.0.0.1:5173.
+
+The header shows what is actually available: **Local / Ready** only when the backend is up and Ollama has the model, **Ollama unavailable** or **Model not installed** when the backend is up but can't answer yet, and **Backend offline** when the API can't be reached. The last three come with a short explanation above the question box and a **Check again** button. Status is checked on load, when you ask, and after errors; it isn't polled.
+
+### Chatting with your documents
+
+- **Context:** with nothing selected, questions search **all processed documents**, the API's default. Tick documents in the sidebar to search only those; the box above the composer always shows the current context, and each question in the conversation is labelled with the documents it was asked about. Only processed documents can be ticked. Uploading or failed ones stay visible but disabled, and a deleted document leaves the context automatically.
+- **Asking:** Enter sends, Shift+Enter adds a line. While an answer is being generated the send button is disabled (the box stays editable so you can draft the next question). Local models can take a few seconds, longer on the first question after a start.
+- **Answers:** the model's text is shown as plain text with paragraphs, lists, **bold** and `[Source N]` markers. It is never rendered as HTML. Below each answer, **Sources** lists the document pages the model was given, grouped by page; open a card to see which chunks it came from and their similarity. Similarity says how close a passage is to the question; it isn't a confidence score. When the documents don't contain the answer, you get the "couldn't find enough information" reply without sources.
+- **Errors:** a failed answer explains what went wrong (backend down, Ollama not running, model not installed, timeout, a deleted document) and offers **Retry**, which asks the same question again with the documents selected now.
+- **New chat** clears the conversation. Documents and the selection are kept.
+- **Follow-ups:** each question is answered on its own from the documents; earlier messages aren't sent to the model. The conversation lives only in the page: reloading starts a new chat, and nothing is stored on the server or in the browser.
+- **Small screens:** below 720px wide the document list becomes a drawer, opened from the header or with **Choose documents**.
+
+### Document library
 
 The **Documents** sidebar lets you upload PDFs (button or drag and drop), see each upload's state, retry or dismiss failed uploads, refresh the list, and delete a document after an inline confirmation. Each document shows its processing status (Uploaded, Processing…, Processed with page and chunk counts, or Failed with the reason); the list refreshes itself while anything is still processing.
 
@@ -371,6 +387,7 @@ pytest                 # everything, including tests that load the real embeddin
 pytest -m "not model"  # skip tests that need the real embedding model or Ollama (fast)
 pytest -m ollama       # only the real-LLM tests (skipped automatically if Ollama or the model is missing)
 
-# Frontend production build (from frontend/)
-npm run build
+# Frontend (from frontend/)
+npm test               # Vitest + Testing Library, against a fake backend (no servers needed)
+npm run build          # production build
 ```

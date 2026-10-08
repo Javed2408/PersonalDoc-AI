@@ -2,12 +2,11 @@ import Icon from '../Common/Icon.jsx'
 import DocumentItem from './DocumentItem.jsx'
 import UploadDropzone from './UploadDropzone.jsx'
 import UploadItem from './UploadItem.jsx'
-import { useDocuments } from '../../hooks/useDocuments.js'
 
-export default function DocumentLibrary() {
-  const library = useDocuments()
+export default function DocumentLibrary({ library, selection }) {
   const { status, documents, error, uploads, deletions } = library
   const loadingFirstTime = status === 'loading' && documents.length === 0
+  const allSelected = selection.selected.length === 0
 
   return (
     <section className="library" aria-labelledby="library-title">
@@ -61,16 +60,38 @@ export default function DocumentLibrary() {
       )}
 
       {documents.length > 0 && (
-        <ul className="doc-list">
-          {documents.map((document) => (
-            <DocumentItem
-              key={document.document_id}
-              document={document}
-              deletion={deletions[document.document_id]}
-              onDelete={library.remove}
-            />
-          ))}
-        </ul>
+        <div className="library__context">
+          <div className="library__context-header">
+            <h3 className="sidebar__title">Chat context</h3>
+            <span className="library__context-summary" aria-live="polite">
+              {allSelected ? 'All documents' : `${selection.selected.length} selected`}
+            </span>
+          </div>
+
+          <button
+            type="button"
+            className={`context-all${allSelected ? ' context-all--active' : ''}`}
+            aria-pressed={allSelected}
+            onClick={selection.clear}
+          >
+            <Icon name="stack" size={16} />
+            <span className="context-all__label">All processed documents</span>
+            <span className="context-all__count">{selection.processed.length}</span>
+          </button>
+
+          <ul className="doc-list">
+            {documents.map((document) => (
+              <DocumentItem
+                key={document.document_id}
+                document={document}
+                deletion={deletions[document.document_id]}
+                onDelete={library.remove}
+                selected={selection.isSelected(document.document_id)}
+                onToggle={selection.toggle}
+              />
+            ))}
+          </ul>
+        </div>
       )}
     </section>
   )
