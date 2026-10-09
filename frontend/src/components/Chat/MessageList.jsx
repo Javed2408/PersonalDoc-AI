@@ -5,7 +5,7 @@ import UserMessage from './UserMessage.jsx'
 const prefersReducedMotion = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
 
 // Memoised: typing in the composer doesn't re-render the conversation.
-function MessageList({ messages, onRetry, pending }) {
+function MessageList({ messages, onRetry, pending, isDocumentAvailable }) {
   const listRef = useRef(null)
   const last = messages[messages.length - 1]
 
@@ -25,7 +25,12 @@ function MessageList({ messages, onRetry, pending }) {
             {message.role === 'user' ? (
               <UserMessage message={message} />
             ) : (
-              <AssistantMessage message={message} onRetry={onRetry} retryDisabled={pending} />
+              <AssistantMessage
+                message={message}
+                onRetry={onRetry}
+                retryDisabled={pending}
+                isDocumentAvailable={isDocumentAvailable}
+              />
             )}
           </li>
         ))}

@@ -10,7 +10,8 @@ const PATHS = {
   stack: 'M12 3 3 8l9 5 9-5zM3 13l9 5 9-5',
   chevron: 'm9 6 6 6-6 6',
   alert: 'M12 8v5m0 3.5v.5M10.3 3.9 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0',
-  info: 'M12 11v6m0-9.5V8M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18',
+  external: 'M14 4h6v6m0-6-9 9m7 1v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5',
+  info:'M12 11v6m0-9.5V8M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18',
 }
 
 export default function Icon({ name, size = 16 }) {

@@ -88,6 +88,15 @@ export function deleteDocument(documentId, options) {
 }
 
 /**
+ * Where the browser can open a document's original PDF. Built-in viewers in Chrome, Edge and Firefox
+ * honour `#page=N`; others open at the first page.
+ */
+export function documentFileUrl(documentId, pageNumber) {
+  const page = Number.isInteger(pageNumber) && pageNumber > 0 ? `#page=${pageNumber}` : ''
+  return `${API_BASE_URL}/api/documents/${encodeURIComponent(documentId)}/file${page}`
+}
+
+/**
  * Ask one question. The backend retrieves, generates and returns { answer, status, model, sources }.
  * Omitted `documentIds` (or []) means all processed documents; omitted `k` uses the backend default.
  */

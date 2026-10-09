@@ -714,16 +714,27 @@ code {
   font-weight: 600;
 }
 
+/* An inline [Source N] that maps to one of this answer's sources. */
 .cite {
   display: inline-block;
+  margin: 0 1px;
   padding: 0 6px;
+  border: none;
   border-radius: 4px;
   background: var(--color-accent-soft);
   color: var(--color-accent);
+  font: inherit;
   font-size: 12px;
   line-height: 1.6;
   white-space: nowrap;
   vertical-align: 1px;
+  cursor: pointer;
+  transition: background var(--transition);
+}
+
+.cite:hover {
+  background: rgb(99 230 190 / 0.2);
+  text-decoration: underline;
 }
 
 .message__model {
@@ -869,17 +880,17 @@ code {
   list-style: none;
   margin: 0;
   padding: 0;
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 230px), 1fr));
-  gap: var(--space-2);
-  align-items: start;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
 }
 
 .source-card {
   min-width: 0;
   border-radius: var(--radius-md);
   background: var(--color-surface);
-  transition: background var(--transition);
+  box-shadow: inset 2px 0 0 transparent;
+  transition: background var(--transition), box-shadow var(--transition);
 }
 
 .source-card:hover,
@@ -887,12 +898,24 @@ code {
   background: var(--color-surface-elevated);
 }
 
-.source-card__toggle {
+.source-card--targeted {
+  box-shadow: inset 2px 0 0 var(--color-accent);
+}
+
+.source-card__header {
   display: flex;
   align-items: center;
+  gap: var(--space-2);
+  padding-right: var(--space-3);
+}
+
+.source-card__toggle {
+  display: flex;
+  flex: 1;
+  align-items: center;
   gap: var(--space-3);
-  width: 100%;
-  padding: var(--space-3);
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
   border: none;
   border-radius: var(--radius-md);
   background: transparent;
@@ -929,6 +952,7 @@ code {
 
 .source-card__chevron {
   display: inline-flex;
+  flex-shrink: 0;
   color: var(--color-text-secondary);
   transition: transform var(--transition);
 }
@@ -937,35 +961,117 @@ code {
   transform: rotate(90deg);
 }
 
-.source-card__details {
-  padding: 0 var(--space-3) var(--space-3) calc(var(--space-3) * 2 + 16px);
+.source-card__pdf {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  padding: 3px var(--space-2);
+  border-radius: var(--radius-sm);
+  color: var(--color-accent);
+  font-size: 12px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.source-card__pdf:hover {
+  background: var(--color-accent-soft);
+  text-decoration: underline;
+}
+
+.source-card__deleted {
+  flex-shrink: 0;
   font-size: 12px;
   color: var(--color-text-secondary);
 }
 
-.source-card__chunks {
+.source-card__details {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: 0 var(--space-3) var(--space-3) calc(var(--space-3) * 2 + 16px);
+}
+
+.source-card__notice {
+  font-size: 13px;
+  color: var(--color-warning);
+}
+
+.source-chunks {
   list-style: none;
-  margin: 0 0 var(--space-2);
+  margin: 0;
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-3);
 }
 
-.source-card__chunks li {
+.source-chunk {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 calc(var(--space-2) * -1);
+  padding: var(--space-2);
+  border-radius: var(--radius-sm);
+  scroll-margin: var(--space-6);
+}
+
+/* Reached from an inline citation: a steady outline plus the "Selected" tag, no flashing. */
+.source-chunk--targeted {
+  background: var(--color-accent-soft);
+  box-shadow: inset 0 0 0 1px rgb(99 230 190 / 0.45);
+}
+
+.source-chunk:focus-visible {
+  outline-offset: 0;
+}
+
+.source-chunk__meta {
   display: flex;
   flex-wrap: wrap;
+  align-items: baseline;
   gap: 2px var(--space-3);
+  font-size: 12px;
+  color: var(--color-text-secondary);
   font-variant-numeric: tabular-nums;
 }
 
-.source-card__chunk-label {
+.source-chunk__label {
   color: var(--color-text);
+  font-weight: 600;
+}
+
+.source-chunk__tag {
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--color-accent);
+  color: var(--color-bg);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+/* The retrieved text, verbatim: a quote, visibly not the whole page. */
+.source-chunk__excerpt {
+  margin: 0;
+  padding: var(--space-1) 0 var(--space-1) var(--space-3);
+  border-left: 2px solid var(--color-border);
+  color: var(--color-text);
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.source-chunk__missing {
+  font-size: 13px;
+  font-style: italic;
+  color: var(--color-text-secondary);
 }
 
 .source-card__note {
   font-size: 11px;
   line-height: 1.4;
+  color: var(--color-text-secondary);
 }
 
 /* Context bar and composer */
@@ -1382,6 +1488,11 @@ code {
 
   .chip__name {
     max-width: 160px;
+  }
+
+  /* Excerpts get the full width on phones. */
+  .source-card__details {
+    padding-left: var(--space-3);
   }
 }
 

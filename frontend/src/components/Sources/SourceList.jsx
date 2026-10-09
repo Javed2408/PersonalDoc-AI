@@ -6,7 +6,7 @@ function plural(count, word) {
 }
 
 /** The passages the model was given, exactly as the backend returned them, grouped by page. */
-export default function SourceList({ sources }) {
+export default function SourceList({ messageId, sources, target, isDocumentAvailable }) {
   if (!sources?.length) return null
   const groups = groupSources(sources)
 
@@ -20,7 +20,13 @@ export default function SourceList({ sources }) {
       </h3>
       <ul className="sources__list">
         {groups.map((group) => (
-          <SourceCard key={group.key} group={group} />
+          <SourceCard
+            key={group.key}
+            messageId={messageId}
+            group={group}
+            target={group.sources.some((source) => source.chunk_id === target?.chunkId) ? target : null}
+            available={isDocumentAvailable ? isDocumentAvailable(group.documentId) : true}
+          />
         ))}
       </ul>
     </section>

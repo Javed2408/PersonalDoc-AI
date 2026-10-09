@@ -1,6 +1,9 @@
-"""Document upload, listing, deletion and chunk inspection endpoints."""
+"""Document upload, listing, deletion, chunk inspection and PDF preview endpoints."""
 
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, File, HTTPException, Path, Request, UploadFile, status
+from fastapi.responses import FileResponse
 
 from app.models.schemas import (
     DocumentChunksResponse,
@@ -86,6 +89,37 @@ def get_document_chunks(
         chunk_overlap=stored.chunk_overlap,
         chunk_count=len(stored.chunks),
         chunks=stored.chunks,
+    )
+
+
+# Only real document IDs: anything else (including "../" tricks) is rejected before any lookup.
+DocumentIdPath = Annotated[str, Path(pattern=r"^[0-9a-f]{32}$")]
+
+PDF_RESPONSE_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    # Private documents: never kept in the browser's disk cache.
+    "Cache-Control": "no-store",
+    # Other sites can't embed the file. (No CSP sandbox: it stops browsers' built-in PDF viewers.)
+    "Cross-Origin-Resource-Policy": "same-site",
+}
+
+
+@router.get("/{document_id}/file", response_class=FileResponse)
+def get_document_file(
+    document_id: DocumentIdPath,
+    service: DocumentService = Depends(get_document_service),
+) -> FileResponse:
+    """The original PDF, shown inline by the browser's own viewer (which understands #page=N)."""
+    try:
+        document, path = service.get_file(document_id)
+    except DocumentError as error:
+        raise to_http_error(error) from error
+    return FileResponse(
+        path,
+        media_type="application/pdf",
+        filename=document.original_filename,
+        content_disposition_type="inline",
+        headers=PDF_RESPONSE_HEADERS,
     )
 
 

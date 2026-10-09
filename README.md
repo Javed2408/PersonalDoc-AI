@@ -2,7 +2,7 @@
 
 A privacy-first, local RAG application for chatting with your personal documents using a locally running LLM.
 
-> **Status:** Phase 7 (chat UI). Upload PDFs, choose which ones to ask about (or all of them), and chat with them in the browser. Each answer comes from a local Ollama model, **only from the retrieved passages**, and lists the pages it's based on, or says clearly that the documents don't contain the answer. Everything stays on your machine. Next: Phase 8, citations and document UX (see [Phases.md](Phases.md)).
+> **Status:** Phase 8 (citations and document UX). Upload PDFs, choose which ones to ask about (or all of them), and chat with them in the browser. Each answer comes from a local Ollama model, **only from the retrieved passages**, and shows its evidence: the exact passages it was given, the page each one is on, `[Source N]` citations that jump to them, and a link to open the original PDF at that page. When the documents don't contain the answer, it says so. Everything stays on your machine. Next: Phase 9, evaluation and reliability (see [Phases.md](Phases.md)).
 
 ## Project documents
 
@@ -121,6 +121,7 @@ Interactive API docs are at http://127.0.0.1:8000/docs.
 | `GET` | `/api/documents` | List stored documents, newest first |
 | `POST` | `/api/documents/upload` | Upload one PDF (multipart field `file`). Returns `201` with metadata |
 | `GET` | `/api/documents/{document_id}/chunks` | Extracted text chunks of a processed document |
+| `GET` | `/api/documents/{document_id}/file` | The original PDF, shown inline (`application/pdf`). Only a real 32-character document ID is accepted (`422` otherwise); unknown, deleted or missing files give a readable `404`. The file is always `<document_id>.pdf` inside `DATA_DIR/documents`, never a client-supplied path. Sent with `nosniff`, `Cache-Control: no-store` and `Cross-Origin-Resource-Policy: same-site` |
 | `DELETE` | `/api/documents/{document_id}` | Delete a document's file, chunks and metadata |
 | `POST` | `/api/retrieval/search` | Most relevant chunks for a question (no answer generation) |
 | `POST` | `/api/chat` | Grounded answer from a local LLM, with its sources (needs Ollama) |
@@ -358,7 +359,10 @@ The header shows what is actually available: **Local / Ready** only when the bac
 
 - **Context:** with nothing selected, questions search **all processed documents**, the API's default. Tick documents in the sidebar to search only those; the box above the composer always shows the current context, and each question in the conversation is labelled with the documents it was asked about. Only processed documents can be ticked. Uploading or failed ones stay visible but disabled, and a deleted document leaves the context automatically.
 - **Asking:** Enter sends, Shift+Enter adds a line. While an answer is being generated the send button is disabled (the box stays editable so you can draft the next question). Local models can take a few seconds, longer on the first question after a start.
-- **Answers:** the model's text is shown as plain text with paragraphs, lists, **bold** and `[Source N]` markers. It is never rendered as HTML. Below each answer, **Sources** lists the document pages the model was given, grouped by page; open a card to see which chunks it came from and their similarity. Similarity says how close a passage is to the question; it isn't a confidence score. When the documents don't contain the answer, you get the "couldn't find enough information" reply without sources.
+- **Answers:** the model's text is shown as plain text with paragraphs, lists and **bold**. It is never rendered as HTML. When the documents don't contain the answer, you get the "couldn't find enough information" reply without sources.
+- **Sources:** below each answer, one card per document page the model was given, with the filename and page. Open a card to read each retrieved passage **verbatim**, with its chunk number and similarity. Several passages from the same page share a card but stay separate. These are the exact excerpts the model saw, not the whole page. Similarity says how close a passage is to the question; it isn't a confidence score.
+- **Citations:** a `[Source N]` in the answer becomes a button when this answer really has a "Source N". It opens that card and moves to that exact passage, marked "Selected from the answer". Any other marker (out of range or malformed) stays plain text. Citations show which passages the model pointed to; they don't prove that every sentence is supported, so read the excerpts.
+- **Original PDF:** **PDF p.N** opens the stored PDF in a new tab. Chrome, Edge and Firefox open it at that page (`#page=N`, verified in Chrome); other viewers may start at page 1, so the page number is always shown on the card. If the document has been deleted, the card says so instead and keeps the excerpts.
 - **Errors:** a failed answer explains what went wrong (backend down, Ollama not running, model not installed, timeout, a deleted document) and offers **Retry**, which asks the same question again with the documents selected now.
 - **New chat** clears the conversation. Documents and the selection are kept.
 - **Follow-ups:** each question is answered on its own from the documents; earlier messages aren't sent to the model. The conversation lives only in the page: reloading starts a new chat, and nothing is stored on the server or in the browser.

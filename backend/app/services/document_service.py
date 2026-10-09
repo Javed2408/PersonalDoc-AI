@@ -195,6 +195,24 @@ class DocumentService:
             raise DocumentStorageError("The document's text chunks are missing.")
         return stored
 
+    def get_file(self, document_id: str) -> tuple[DocumentMetadata, Path]:
+        """The stored PDF of a document, for previewing. Only ever `<document_id>.pdf` in the documents directory."""
+        try:
+            document = self._store.get(document_id)
+        except DocumentStoreError as error:
+            raise DocumentStorageError("The document library could not be loaded.") from error
+        if document is None:
+            raise DocumentNotFoundError("Document not found. It may have been deleted.")
+        # Metadata can't redirect one document to another file: the name is fixed by the ID.
+        if document.stored_filename != f"{document_id}{PDF_EXTENSION}":
+            logger.error("Unexpected stored filename for document %s", document_id)
+            raise DocumentStorageError("The document's file could not be opened.")
+        path = self.stored_path(document.stored_filename)
+        if not path.is_file():
+            logger.warning("File for document %s is missing", document_id)
+            raise DocumentNotFoundError("The original PDF of this document is no longer available.")
+        return document, path
+
     def _copy_validated(self, source: BinaryIO, destination: Path) -> int:
         """Stream `source` to `destination`, enforcing the size limit and PDF signature."""
         total = 0

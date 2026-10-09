@@ -119,6 +119,27 @@ def test_sources_are_the_retrieved_chunks_given_to_the_model(library, llm):
         assert f'label="{source["label"]}" document="{source["original_filename"]}" page="{source["page_number"]}"' in llm.last_user_prompt
 
 
+def test_source_excerpts_are_the_stored_chunks_verbatim(library):
+    # The UI shows `text` as the excerpt behind a citation, so it must be the chunk exactly as
+    # extracted and stored, with the same metadata, not something rebuilt or summarised.
+    client, ids = library
+
+    body = answered(client, MULTI_QUERY, k=4)
+    stored = {c["chunk_id"]: c for c in client.get(f"/api/documents/{ids['ml']}/chunks").json()["chunks"]}
+
+    assert body["sources"]
+    for source in body["sources"]:
+        chunk = stored[source["chunk_id"]]
+        assert source["text"] == chunk["text"]
+        assert len(source["text"]) == chunk["char_count"]
+        for field in ("document_id", "original_filename", "page_number", "chunk_index"):
+            assert source[field] == chunk[field], field
+        assert set(source) == {
+            "label", "chunk_id", "document_id", "original_filename", "page_number", "chunk_index",
+            "text", "distance", "similarity",
+        }  # Unchanged response shape: no paths or storage details
+
+
 def test_multiple_sources_are_preserved_in_rank_order(library):
     client, ids = library
 

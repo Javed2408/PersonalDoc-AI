@@ -1,6 +1,6 @@
 /**
  * A deliberately small reader for the plain-text answers the local model writes: paragraphs,
- * line breaks, bullet and numbered lists, **bold**, `code` and [Source N] citations.
+ * line breaks, bullet and numbered lists, **bold**, `code` and [Source N] citation markers.
  *
  * It produces plain data that React renders as text, so model output can never become HTML.
  * Anything it doesn't recognise (tables, links, raw HTML) is shown verbatim.
@@ -19,7 +19,8 @@ export function parseInline(text) {
     if (/^\*\*[^*]+\*\*$/.test(piece)) parts.push({ type: 'bold', text: piece.slice(2, -2) })
     else if (/^`[^`]+`$/.test(piece)) parts.push({ type: 'code', text: piece.slice(1, -1) })
     else if (/^\[\s*Source\s+\d+\s*\]$/i.test(piece)) {
-      parts.push({ type: 'cite', text: `Source ${piece.match(/\d+/)[0]}` })
+      // `raw` is kept so a marker that matches no source can be shown exactly as written.
+      parts.push({ type: 'cite', number: Number(piece.match(/\d+/)[0]), raw: piece })
     } else parts.push({ type: 'text', text: piece })
   }
   return parts

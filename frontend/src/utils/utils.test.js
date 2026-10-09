@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { parseAnswer, parseInline } from './answerFormat.js'
 import { describeChatError } from './chatErrors.js'
-import { countDocuments, formatSimilarity, groupSources } from './sources.js'
+import { citationTargets, countDocuments, formatSimilarity, groupSources, sourceElementId } from './sources.js'
 import { serviceStatus } from './status.js'
 
 describe('parseAnswer', () => {
@@ -39,7 +39,7 @@ describe('parseInline', () => {
       { type: 'text', text: ' with ' },
       { type: 'code', text: 'lambda' },
       { type: 'text', text: ' ' },
-      { type: 'cite', text: 'Source 2' },
+      { type: 'cite', number: 2, raw: '[Source 2]' },
       { type: 'text', text: ' <b>x</b>' },
     ])
   })
@@ -72,6 +72,17 @@ describe('sources helpers', () => {
       ['b.pdf', 1, ['Source 2']],
     ])
     expect(countDocuments([source('a', 1), source('a', 2)])).toBe(1)
+  })
+
+  it('maps citation numbers by label, not by position', () => {
+    const second = { label: 'Source 2', chunk_id: 'b' }
+    const first = { label: 'Source 1', chunk_id: 'a' }
+    const targets = citationTargets([second, first, { label: 'Notes', chunk_id: 'x' }])
+
+    expect(targets.get(1)).toBe(first)
+    expect(targets.get(2)).toBe(second)
+    expect(targets.has(3)).toBe(false)
+    expect(sourceElementId('a-4', 'abc-00001')).toBe('source-a-4-abc-00001')
   })
 
   it('formats similarity as a plain two-decimal number', () => {

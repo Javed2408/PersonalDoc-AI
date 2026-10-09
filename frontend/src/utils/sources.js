@@ -28,3 +28,21 @@ export function formatSimilarity(value) {
 export function countDocuments(sources = []) {
   return new Set(sources.map((source) => source.document_id)).size
 }
+
+/**
+ * Which source each [Source N] marker in an answer refers to: N -> the source the backend labelled
+ * "Source N" for this answer. Markers with no entry here point at nothing and stay plain text.
+ */
+export function citationTargets(sources = []) {
+  const targets = new Map()
+  for (const source of sources) {
+    const match = /^Source (\d+)$/.exec(source.label ?? '')
+    if (match && !targets.has(Number(match[1]))) targets.set(Number(match[1]), source)
+  }
+  return targets
+}
+
+/** DOM id of one source chunk in one answer. Chunk IDs are stable; the message ID keeps answers apart. */
+export function sourceElementId(messageId, chunkId) {
+  return `source-${messageId}-${chunkId}`
+}

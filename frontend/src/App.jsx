@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import Header from './components/Layout/Header.jsx'
 import Sidebar from './components/Layout/Sidebar.jsx'
 import ChatPanel from './components/Chat/ChatPanel.jsx'
@@ -39,6 +39,17 @@ export default function App() {
 
   const closeDrawer = useCallback(() => setDrawerOpen(false), [])
 
+  // Can a source's original PDF still be opened? Only "no" when the loaded library lacks the
+  // document (it was deleted); while the list is loading or failed to load, nothing is known.
+  const knownDocumentIds = useMemo(
+    () => (library.status === 'ok' ? new Set(library.documents.map((doc) => doc.document_id)) : null),
+    [library.status, library.documents],
+  )
+  const isDocumentAvailable = useCallback(
+    (documentId) => knownDocumentIds === null || knownDocumentIds.has(documentId),
+    [knownDocumentIds],
+  )
+
   const startNewChat = useCallback(() => {
     chat.clear()
     composerRef.current?.focus()
@@ -64,6 +75,7 @@ export default function App() {
           onRecheck={recheck}
           onChooseDocuments={() => setDrawerOpen(true)}
           composerRef={composerRef}
+          isDocumentAvailable={isDocumentAvailable}
         />
       </div>
     </div>

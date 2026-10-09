@@ -2,7 +2,7 @@
 
 ## Current phase
 
-**Phase 7: Chat UI — complete.** Awaiting review before Phase 8 (not started).
+**Phase 8: Citations and Document UX — complete.** Awaiting review before Phase 9 (not started).
 
 ## Completed
 
@@ -38,6 +38,26 @@
   - **Responsive layout:** desktop, tablet (260px sidebar), and a drawer below 720px.
   - **Accessibility:** labelled controls, a `role="log"` conversation, `aria-expanded` cards and drawer, visible focus, focus moved into the drawer, Escape to close.
   - **Backend (additive only):** `/api/health` now includes `llm: {status, model}` through `LLM.status()` (Ollama `/api/tags`, 2 s timeout).
+- Phase 8:
+  - **Source excerpts:** each source card lists every retrieved chunk of its page separately, with the verbatim text as a quote, the chunk number and similarity, and a note that it is an excerpt, not the whole page.
+  - **Inline citations:** `[Source N]` becomes a button when the answer has a source labelled "Source N". Clicking it opens the card and focuses and marks that exact chunk.
+  - **PDF preview:** "PDF p.N" opens the stored PDF in the browser's own viewer at `#page=N` in a new tab, through the new read-only `GET /api/documents/{id}/file`.
+  - **Deleted documents:** existing answers keep their excerpts; the PDF link is replaced by "Deleted" plus an explanation.
+
+## Project structure (Phase 8 additions)
+
+```text
+backend/app/api/documents.py               + GET /{document_id}/file (FileResponse, safe headers, ID pattern)
+backend/app/services/document_service.py   + get_file(): metadata lookup, fixed <id>.pdf name, stored_path() guard
+backend/tests/test_document_file.py        PDF endpoint: content, headers, range, 404s, 422s, traversal, tampering, no paths
+backend/tests/test_rag.py                  + source text/metadata == stored chunk, response shape unchanged
+frontend/src/components/Sources/SourceCard.jsx   Chunks with excerpts, PDF link / Deleted, citation target + focus
+frontend/src/components/Chat/AnswerText.jsx      [Source N] -> button only when that label exists, else raw text
+frontend/src/components/Chat/AssistantMessage.jsx  Citation target state per answer
+frontend/src/utils/sources.js              + citationTargets() (label -> source), sourceElementId()
+frontend/src/services/api.js               + documentFileUrl(id, page)
+frontend/src/citations.test.jsx            Phase 8 frontend tests
+```
 
 ## Project structure (Phase 7 additions)
 
@@ -78,6 +98,37 @@ backend/tests/fakes.py               + TopicEmbedder (keyword-count vectors for 
 ```
 
 ## Important decisions
+
+### Phase 8
+
+- **API changes (additive only):**
+  - `GET /api/documents/{document_id}/file` is the only new endpoint.
+  - `/api/chat`, its schema, retrieval, the evidence gate and the prompt are unchanged.
+- **Excerpt strategy:**
+  - `/api/chat` already returned each source's `text`, copied from retrieval, which reads the chunk stored in ChromaDB at indexing time. It equals the Phase 3 chunk file's text; a test compares them via `/api/documents/{id}/chunks`.
+  - So no new storage and no extra request per source.
+  - The frontend shows `text` verbatim (`white-space: pre-wrap`, never HTML) and never fills in missing text: an empty `text` shows "No text was returned for this source".
+- **Citation mapping:**
+  - `citationTargets()` maps N to the source whose backend `label` is "Source N", so it doesn't depend on array position.
+  - The backend already strips out-of-range `[Source N]` (`remove_invalid_citations`). The frontend still renders any marker without a matching label, or any malformed variant (`[Source]`, `[Src 1]`, `[Source 1a]`, `[Source 1, 2]`), as the original text.
+  - Each chunk's DOM id is `source-<message id>-<chunk_id>`, both stable, so identical chunks in different answers never collide.
+  - Citations aren't claimed to prove every sentence; the README says so.
+- **Navigation:**
+  - A click sets a per-answer `{chunkId, request}` target.
+  - The card holding that chunk opens; the chunk is focused (`tabIndex=-1`), then scrolled into view instantly with `block: 'nearest'`.
+  - Highlight: a steady outline plus a visible "Selected from the answer" tag, with no animation and not colour alone.
+  - Smooth scrolling was dropped: Chrome doesn't animate in a background or occluded window, and the jump never happened in browser testing.
+- **Grouping:** cards are grouped by (document, page) in rank order, and every chunk keeps its own row, label, number, similarity and excerpt.
+- **PDF preview strategy:**
+  - Native browser viewer in a new tab, `href = /api/documents/{id}/file#page=N`, `target=_blank`, `rel="noopener noreferrer"`. No PDF.js or other dependency.
+  - Chrome verified to open at page N. Edge and Firefox support `#page`; others may open at page 1, so the page is always printed on the card.
+- **PDF endpoint safety:**
+  - The ID must match `^[0-9a-f]{32}$` (422), and the document must exist in metadata (404).
+  - The stored filename must be exactly `<id>.pdf` (500 if the metadata was tampered with), resolved through `stored_path()`, which refuses anything outside `documents_dir`; a missing file gives 404.
+  - Headers: `application/pdf`, `Content-Disposition: inline` with the original name (RFC 5987-encoded when needed), `X-Content-Type-Options: nosniff`, `Cache-Control: no-store`, `Cross-Origin-Resource-Policy: same-site`.
+  - No CSP `sandbox`, because it stops built-in PDF viewers. Range requests work (206).
+- **Deleted documents:** `App` passes `isDocumentAvailable(id)`, true while the library is loading or failed, false when the loaded list lacks the ID. Unavailable sources show "Deleted" and an explanation instead of the link; their excerpts stay. A stale URL opened directly gets the readable 404 detail.
+- **Source list layout:** a vertical stack of compact rows instead of the Phase 7 grid, so excerpts get the full reading width (and the full width on phones).
 
 ### Phase 7
 
@@ -159,7 +210,7 @@ backend/tests/fakes.py               + TopicEmbedder (keyword-count vectors for 
 ```bash
 # Backend (backend/)
 .venv/Scripts/python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
-.venv/Scripts/python -m pytest                    # 309 tests, ~60 s (real model + Ollama)
+.venv/Scripts/python -m pytest                    # 331 tests, ~60 s (real model + Ollama)
 .venv/Scripts/python -m pytest -m "not model"     # no real model or Ollama
 .venv/Scripts/python -m pytest -m ollama          # 9 real-LLM tests, ~20 s
 .venv/Scripts/python -m evaluation.retrieval_eval [--write]
@@ -167,11 +218,38 @@ backend/tests/fakes.py               + TopicEmbedder (keyword-count vectors for 
 
 # Frontend (frontend/)
 npm run dev      # http://127.0.0.1:5173
-npm test         # 49 tests, ~25 s, no servers needed
+npm test         # 69 tests, ~30 s, no servers needed
 npm run build
 ```
 
 ## Tests
+
+### Phase 8 (2026-10-09)
+
+- **Backend: 331 passed** (309 before, +22):
+  - `test_document_file.py` (21): stored bytes, content type and safe headers; encoded non-ASCII and quoted names; range 206; preview before processing; unknown 404; deleted 404; missing-file 404; 7 malformed IDs → 422; 8 traversal URLs never reach a file; tampered metadata can't redirect to another document's file; no data paths in headers or errors.
+  - `test_rag.py` (+1): every chat source's `text`, page, chunk index and filename equal the stored chunk, and the source schema is unchanged.
+- **Frontend: 69 passed** (49 before, +20), 3 consecutive runs, no React warnings.
+  - `citations.test.jsx` (19):
+    - excerpts expand and collapse and are verbatim quotes; same-page chunks are listed separately; no invented text
+    - citation mapping by label even with shuffled sources; a click focuses the exact chunk and moves on the next click; citations scoped per answer
+    - 6 malformed or out-of-range markers stay text; answers without citations still list sources
+    - similarity wording; PDF link href, page and rel; link and toggle are separate controls
+    - deleted before the answer and deleted during the conversation; HTML in answers and excerpts stays text
+  - `utils.test.js` (+1): label-based mapping and DOM ids.
+- **Browser (Chrome, real backend + llama3.2:3b):**
+  - Hidden-layers + weights question: answered without `[Source N]` markers; 3 cards shown anyway.
+  - Expanded excerpt identical to the stored chunk from `/chunks` (464 chars, same id, page and file).
+  - "PDF p.3" opened ml_handbook.pdf in Chrome's viewer at **3 / 3**, showing that page's text.
+  - Uploaded a test PDF whose page 1 split into 3 chunks. A question with requested citations got `[Source 1–4]` buttons; page 1's card held Sources 1–3 separately.
+  - Clicking Source 2 with the card collapsed opened it, scrolled 207 → 735, focused chunk `…-00001` (fully visible) and marked it "Selected from the answer". The first attempt (smooth scroll) left it out of view; fixed to an instant jump.
+  - Asked the model to echo `[Source 9] [Source] [Src 1] [Source 1]`: the backend removed `[Source 9]`, `[Source]` and `[Src 1]` stayed text, `[Source 1]` became a button.
+  - Deleted the test PDF in the UI: all 3 of its cards switched to "Deleted", with no PDF links, a notice, and excerpts kept. Its old URL returned `{"detail":"Document not found. It may have been deleted."}`.
+  - Live endpoint: headers as above through the Vite proxy; `..%2F`, `../../`, `NOT-AN-ID` and an unknown ID were rejected (404/404/422/404).
+  - 375px iframe: citation jump, excerpt and PDF link usable, no horizontal overflow.
+  - No console errors or warnings; no document or question text in the backend log.
+  - The Chrome window was occluded (`visibilityState: hidden`) during testing, and the page reloaded once (navigation type `reload`; Vite logged nothing and no app code reloads). Cause not identified.
+
 
 ### Phase 7 (2026-10-09)
 
@@ -267,15 +345,19 @@ npm run build
 - **No conversation memory:** follow-up questions that depend on earlier messages ("and the second one?") aren't understood, because each question is answered on its own.
 - **No streaming:** answers appear all at once. Local latency is about 0.5–2 s warm, about 10–15 s for the first question after a backend start (both models load).
 - **Health check when Ollama is down:** takes up to 2 s (on Windows a refused localhost connection takes about 2 s), so "Connecting…" shows briefly.
-- **Sources:** no excerpt text, page preview or jump-to-source yet (Phase 8). Answers already in the conversation keep their sources after the document is deleted.
+- **PDF page navigation:** relies on the browser's viewer honouring `#page=N` (verified in Chrome only). There's no in-app viewer, no text highlighting inside the PDF, and phones may download or open the PDF externally.
+- **Excerpt = what the model saw:** if `CHUNK_SIZE` were set above `RAG_MAX_CONTEXT_CHARS`, the single best chunk would be shortened (with " …") before reaching the model, and the excerpt would show that shortened text. It can't happen with the defaults (1000 vs 6000).
+- **Citations are the model's choice:** `llama3.2:3b` often writes no `[Source N]` at all, or "Source 1" without brackets (plain text). Cards are always shown; a citation doesn't prove that a specific sentence is supported.
+- **Stale links:** the PDF link is disabled from the client's document list; a PDF deleted from another tab only shows as deleted after the list refreshes (opening it then gives the 404 detail).
 - **Mobile:** tested at 502px (Chrome's minimum window) and in a 375px iframe, not on real devices or touch input.
 - **Thin evaluation:** the dataset is small and English-only. `all-MiniLM-L6-v2` truncates at 256 tokens.
 - **HNSW is approximate:** for large libraries, the boundary at k may differ slightly from an exact search.
 - **Windows:** ChromaDB keeps index files memory-mapped until the process exits, so the evaluation runner's temp directory may not be fully deleted (it lives in the OS temp dir).
 - `chroma.sqlite3` doesn't shrink after deletes (about 25 MB after the Phase 4 tests).
-- **Carried over:** the embedding model downloads on first use; CPU embedding only; no OCR; no re-process action; single backend process.
+- **Carried over:** the embedding model downloads on first use; CPU embedding only; no OCR; single backend process.
+- **No re-index action:** Phases.md lists "delete/re-index actions" under Phase 8, but the Phase 8 spec didn't include re-index, so it wasn't built. Delete exists since Phase 2.
 - Another project's Vite listens on `[::1]:5173`, so use `http://127.0.0.1:5173`.
 
 ## Next phase
 
-Phase 8: Citations and Document UX. Not started.
+Phase 9: Evaluation and Reliability. Not started.

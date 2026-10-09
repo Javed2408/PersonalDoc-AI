@@ -258,7 +258,7 @@ describe('sources', () => {
     await user.click(toggle)
     expect(toggle).toHaveAttribute('aria-expanded', 'true')
     expect(within(cards[0]).getByText('Similarity 0.81')).toBeInTheDocument()
-    expect(within(cards[0]).getByText('Chunk 6')).toBeInTheDocument()
+    expect(within(cards[0]).getByText('Excerpt · chunk 6')).toBeInTheDocument()
     expect(within(cards[0]).getByText(/not a confidence score/i)).toBeInTheDocument()
     expect(within(region).queryByText(/confidence:|%/i)).not.toBeInTheDocument()
   })

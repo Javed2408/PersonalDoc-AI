@@ -40,7 +40,16 @@ function useStickToBottom(scrollRef) {
   }, [scrollRef])
 }
 
-export default function ChatPanel({ chat, selection, library, service, onRecheck, onChooseDocuments, composerRef }) {
+export default function ChatPanel({
+  chat,
+  selection,
+  library,
+  service,
+  onRecheck,
+  onChooseDocuments,
+  composerRef,
+  isDocumentAvailable,
+}) {
   const processedCount = selection.processed.length
   const canAsk = processedCount > 0
   const { selected } = selection
@@ -64,7 +73,12 @@ export default function ChatPanel({ chat, selection, library, service, onRecheck
               onExample={(text) => composerRef.current?.fill(text)}
             />
           ) : (
-            <MessageList messages={chat.messages} onRetry={handleRetry} pending={chat.pending} />
+            <MessageList
+              messages={chat.messages}
+              onRetry={handleRetry}
+              pending={chat.pending}
+              isDocumentAvailable={isDocumentAvailable}
+            />
           )}
         </div>
       </div>
