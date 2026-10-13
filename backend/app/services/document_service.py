@@ -58,7 +58,11 @@ class DocumentStorageError(DocumentError):
     pass
 
 
-class DocumentNotProcessedError(DocumentError):
+class DocumentStateError(DocumentError):
+    """The document's current status doesn't allow the requested action."""
+
+
+class DocumentNotProcessedError(DocumentStateError):
     pass
 
 
@@ -172,7 +176,23 @@ class DocumentService:
             self._store.remove(document_id)
         except (ChunkStoreError, VectorStoreError, DocumentStoreError) as error:
             raise DocumentStorageError("The document could not be deleted.") from error
+        self._remove_late_writes(document_id)
         logger.info("Deleted document %s", document_id)
+
+    def _remove_late_writes(self, document_id: str) -> None:
+        """Clean up once more, now that the metadata is gone.
+
+        A processing job may have saved chunks or vectors after the cleanup above but before
+        the metadata was removed. From that point on, the job's own metadata checks see the
+        document gone and it removes whatever it writes later itself.
+        """
+        try:
+            self._chunk_store.delete(document_id)
+            self._vector_store.delete_document(document_id)
+        except (ChunkStoreError, VectorStoreError):
+            # The document is already gone from the library, and leftovers are never searched
+            # (retrieval only reads documents listed as processed), so the delete still succeeded.
+            logger.error("Could not remove late chunks or vectors of deleted document %s", document_id)
 
     def get_chunks(self, document_id: str) -> StoredChunks:
         try:

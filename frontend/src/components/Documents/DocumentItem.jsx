@@ -14,9 +14,10 @@ function plural(count, word) {
   return `${count} ${word}${count === 1 ? '' : 's'}`
 }
 
-export default function DocumentItem({ document, deletion, onDelete, selected, onToggle }) {
+export default function DocumentItem({ document, deletion, onDelete, retry, onRetry, selected, onToggle }) {
   const [confirming, setConfirming] = useState(false)
   const deleting = deletion?.status === 'deleting'
+  const submittingRetry = retry?.status === 'submitting'
   const name = document.original_filename
   const id = document.document_id
   // Only processed documents are in the vector index, so only they can be chat context.
@@ -60,8 +61,25 @@ export default function DocumentItem({ document, deletion, onDelete, selected, o
           )}
         </span>
 
-        {document.status === 'failed' && document.processing_error && (
-          <p className="doc-item__error">{document.processing_error}</p>
+        {document.status === 'failed' && (
+          <>
+            {document.processing_error && <p className="doc-item__error">{document.processing_error}</p>}
+            {/* Runs the same extraction and indexing again under the same document ID. */}
+            <button
+              type="button"
+              className="button button--small doc-item__retry"
+              disabled={submittingRetry || deleting}
+              onClick={() => onRetry(id)}
+            >
+              {submittingRetry ? 'Retrying…' : 'Retry processing'}{' '}
+              <span className="visually-hidden">{name}</span>
+            </button>
+            {retry?.status === 'failed' && (
+              <p className="doc-item__error" role="alert">
+                Couldn&apos;t retry: {retry.error}
+              </p>
+            )}
+          </>
         )}
 
         {deletion?.status === 'failed' && <p className="doc-item__error">{deletion.error}</p>}

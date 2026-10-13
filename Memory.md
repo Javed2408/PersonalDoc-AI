@@ -2,7 +2,7 @@
 
 ## Current phase
 
-**Phase 8: Citations and Document UX — complete.** Awaiting review before Phase 9 (not started).
+**Phase 8: Citations and Document UX — complete**, plus a follow-up: failed-document recovery. Awaiting review before Phase 9 (not started).
 
 ## Completed
 
@@ -43,6 +43,25 @@
   - **Inline citations:** `[Source N]` becomes a button when the answer has a source labelled "Source N". Clicking it opens the card and focuses and marks that exact chunk.
   - **PDF preview:** "PDF p.N" opens the stored PDF in the browser's own viewer at `#page=N` in a new tab, through the new read-only `GET /api/documents/{id}/file`.
   - **Deleted documents:** existing answers keep their excerpts; the PDF link is replaced by "Deleted" plus an explanation.
+- Phase 8 follow-up, failed-document recovery:
+  - **API:** `POST /api/documents/{document_id}/reindex` sends a `failed` document back through the existing worker under the same ID, file and name. It returns 202 with the document, now `processing`; 409 for `uploaded`, `processing` or `processed`; 404 if unknown; 422 for a malformed ID.
+  - **UI:** "Retry processing" on failed documents only. It is disabled while pending, shows Processing… and then the final result, and shows a readable inline error if the request fails.
+  - **Not supported:** re-indexing healthy `processed` documents.
+
+## Project structure (Phase 8 follow-up additions)
+
+```text
+backend/app/api/documents.py                 + POST /{document_id}/reindex (DocumentIdPath, 202)
+backend/app/services/processing_service.py   + retry_failed(); _fail() records "failed" even if chunk cleanup fails
+backend/app/services/document_store.py       + update_if_status(): check + change in one locked step
+backend/app/services/document_service.py     + DocumentStateError (409); delete cleans chunks/vectors again after removing metadata
+backend/tests/test_document_reindex.py       Retry endpoint, duplicates, failures, delete races, restart
+frontend/src/services/api.js                 + reindexDocument(id)
+frontend/src/hooks/useDocuments.js           + retries state, retryProcessing() with a synchronous in-flight guard
+frontend/src/components/Documents/DocumentItem.jsx  Retry button + inline error on failed documents
+frontend/src/test/fakeBackend.js             + reindex route (acceptFailedOnly)
+frontend/src/documentRetry.test.jsx          Retry UI tests
+```
 
 ## Project structure (Phase 8 additions)
 
@@ -98,6 +117,30 @@ backend/tests/fakes.py               + TopicEmbedder (keyword-count vectors for 
 ```
 
 ## Important decisions
+
+### Phase 8 follow-up: failed-document recovery
+
+- **Scope:** only `failed -> processing`.
+  - Processed documents aren't re-indexed, because a failed run removes the document's vectors (`_fail`), which would make a working document unsearchable.
+  - Safe re-indexing of processed documents needs the old vectors kept until a new run succeeds. It remains a future requirement (PRD FR-10).
+  - Changing `CHUNK_SIZE`/`CHUNK_OVERLAP` doesn't reprocess processed documents.
+- **No second pipeline:** `DocumentProcessor.retry_failed()` calls the existing `submit()`, so a retry runs the same `_process` → `process_pdf` → chunk store → `DocumentIndexer` path as an upload.
+  - The indexer diffs against stored vectors (keyed by `chunk_id`), so a retry never duplicates vectors and removes stale leftovers.
+  - ID, stored file, name and `created_at` are unchanged.
+- **Duplicate guard:** `JsonDocumentStore.update_if_status(id, "failed", status="processing")` checks and switches under the store's lock. Of N simultaneous requests exactly one gets 202 and queues a job; the rest get 409.
+  - The single worker thread also means two jobs for one document never overlap.
+  - A retry goes straight to `processing`, not `uploaded`, so a retry queued behind another document already shows Processing….
+  - Startup recovery re-queues it like any interrupted document; `failed` documents are never retried automatically.
+- **Delete during a retry:** delete still removes metadata last, then removes chunks and vectors once more (`_remove_late_writes`).
+  - Every worker write (chunk file, each vector batch) is followed by a metadata check: the indexer's per-batch `is_cancelled`, the final `update(processed)`, or `_fail`'s update. If the document is gone, the worker discards its data.
+  - `update()` never recreates a record.
+  - So a write lands either before the delete's second cleanup (removed by it) or after the metadata is gone (removed by the worker).
+- **Failure handling:** `_fail` removes vectors, then the chunk file (unless only embedding or vector storage failed), then records `failed`. A chunk file that can't be removed no longer stops the status update; before, the document stayed `processing` with no job, and every retry got 409.
+- **Errors:** `DocumentStateError` → 409, with `DocumentNotProcessedError` as a subclass (its mapping is unchanged). Messages are "This document is already being processed." and "This document is already processed. Reprocessing a processed document isn't supported in this version."
+- **Frontend:**
+  - `retryProcessing(id)` in `useDocuments` has a synchronous `useRef` guard, and the button is disabled while pending, so a double click sends one request.
+  - On 202 the returned document (`processing`) replaces the row, and the existing poll runs until the result. It bumps `mutations`, so an older list response can't overwrite it.
+  - On 404/409 the list refreshes to show the real state. Any error shows inline as "Couldn't retry: <detail>" (`role="alert"`), and is dropped once the document leaves `failed`.
 
 ### Phase 8
 
@@ -210,7 +253,7 @@ backend/tests/fakes.py               + TopicEmbedder (keyword-count vectors for 
 ```bash
 # Backend (backend/)
 .venv/Scripts/python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
-.venv/Scripts/python -m pytest                    # 331 tests, ~60 s (real model + Ollama)
+.venv/Scripts/python -m pytest                    # 357 tests, ~60–90 s (real model + Ollama)
 .venv/Scripts/python -m pytest -m "not model"     # no real model or Ollama
 .venv/Scripts/python -m pytest -m ollama          # 9 real-LLM tests, ~20 s
 .venv/Scripts/python -m evaluation.retrieval_eval [--write]
@@ -218,11 +261,34 @@ backend/tests/fakes.py               + TopicEmbedder (keyword-count vectors for 
 
 # Frontend (frontend/)
 npm run dev      # http://127.0.0.1:5173
-npm test         # 69 tests, ~30 s, no servers needed
+npm test         # 81 tests, ~30 s, no servers needed
 npm run build
 ```
 
 ## Tests
+
+### Phase 8 follow-up: failed-document recovery (2026-10-13)
+
+- **Backend: 357 passed** (331 before, +26), full suite including real-model and Ollama tests. `test_document_reindex.py` ran 5 times in a row with no failures.
+  - accepted retry keeps ID, file, name and schema; failed → processed once the cause is fixed (searchable, 2 vectors, one document)
+  - leftover and obsolete vectors replaced with no duplicates
+  - 7 malformed IDs → 422 (document untouched); unknown → 404; uploaded and processing → 409 with nothing extra queued; processed → 409 with no re-embedding
+  - repeated retries (before and during the job) and 8 simultaneous requests queue exactly one job; the store primitive is atomic across 16 threads
+  - retry failing again: reason recorded, no vectors, retryable; failing mid-indexing: partial batch removed; unreadable PDF: same error, no chunks
+  - failure still recorded when the chunk file can't be removed (this test failed against the previous `_fail`)
+  - delete while the retry is queued, during indexing, or right before a failing embed: nothing recreated
+  - delete whose metadata removal lands after the retry finished: second cleanup removes it all
+  - accepted-but-not-run retry resumes after a restart; failed documents aren't retried on restart
+- **Frontend: 81 passed** (69 before, +12), 3 runs, no React warnings; `npm run build` OK.
+  - `documentRetry.test.jsx` (10): only failed rows have the button; POST to `/api/documents/{id}/reindex` with no body; pending state disables it, so a second click sends nothing; Processing… then Processed and selectable, with chat sending its ID; failing again shows the reason and re-enables the button; 500 detail and unreachable backend shown inline; 409 refreshes to the real state without an alert; 404 drops the row; selection and chat unaffected.
+  - `api.test.js` (+2): request shape and 409 detail.
+- **Live (throwaway `DATA_DIR`, uvicorn :8765, Vite :5180 → :8765, Chrome, real model + llama3.2:3b):**
+  - With `EMBEDDING_DEVICE=cuda:9` (torch has no CUDA here): the valid PDF failed with "The embedding model could not be loaded…" and the corrupted one with "The PDF could not be read…".
+  - On that server: 422 malformed, 404 unknown, 409 while still processing. A retry while still broken got 202, an immediate repeat 409; one "Retrying" log line, failed again, 0 vectors.
+  - Restarted with the right device: both documents still `failed` (no automatic retry).
+  - In the UI, Retry processing on retry_notes.pdf → Processing… (error and button gone) → Processed, 2 pages · 2 chunks.
+  - A question was answered from it, with p.2 and p.1 source cards. Retrying broken.pdf → Failed again with the same reason and the button back.
+  - A processed document gave 409 with the explanation. No console errors; no question text in the backend log.
 
 ### Phase 8 (2026-10-09)
 
@@ -355,8 +421,21 @@ npm run build
 - **Windows:** ChromaDB keeps index files memory-mapped until the process exits, so the evaluation runner's temp directory may not be fully deleted (it lives in the OS temp dir).
 - `chroma.sqlite3` doesn't shrink after deletes (about 25 MB after the Phase 4 tests).
 - **Carried over:** the embedding model downloads on first use; CPU embedding only; no OCR; single backend process.
-- **No re-index action:** Phases.md lists "delete/re-index actions" under Phase 8, but the Phase 8 spec didn't include re-index, so it wasn't built. Delete exists since Phase 2.
-- Another project's Vite listens on `[::1]:5173`, so use `http://127.0.0.1:5173`.
+- **Re-index is for failed documents only:**
+  - Processed documents can't be re-indexed.
+  - Changed chunk settings only apply to new uploads, retried documents, and documents processed or re-indexed by startup recovery.
+- **Single-process assumption:** the retry guard and delete safety rely on one backend process (in-process locks, one worker thread). Several uvicorn workers or processes on one data dir could queue duplicate jobs.
+- **Unwritable metadata:** if `documents.json` can't be written, a failure can't be recorded. The document stays `processing` until the next start (startup recovery re-queues it).
+- **Orphaned data on store errors (cleanup is best-effort):**
+  - If ChromaDB fails while `_fail` removes a failed run's vectors, they stay with the still-listed document. The next retry's indexer replaces or removes them, and deleting the document removes them.
+  - If removing chunks or vectors fails after the document record is gone, nothing removes them later. This covers the delete's second cleanup (`_remove_late_writes`) and the worker's `_discard`. Orphaned chunk files or vectors then stay on disk.
+  - None of this is ever retrieved, because retrieval reads only `processed` documents.
+- **Queued vs running:** a retry waiting behind another document already shows Processing….
+- **Chat empty state:** with only failed documents, the chat area still says "Getting your documents ready…" (Phase 7 wording).
+- **Stale doc:** Architecture.md's `/api/chat` example (with `conversation_id` and `document`/`page`/`excerpt` sources) predates the real schema. It was left untouched.
+- **Port 5173 is shared:** the separate `unified-dashboard` project also runs Vite on port 5173. Never stop it.
+  - It was last observed on `127.0.0.1:5173` (2026-10-13); earlier notes recorded `[::1]:5173`.
+  - While it runs, PersonalDoc's `npm run dev` may not get port 5173. Open the URL Vite prints, or choose a free port (`npm run dev -- --host 127.0.0.1 --port 5180`).
 
 ## Next phase
 

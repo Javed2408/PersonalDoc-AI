@@ -4,7 +4,7 @@ import UploadDropzone from './UploadDropzone.jsx'
 import UploadItem from './UploadItem.jsx'
 
 export default function DocumentLibrary({ library, selection }) {
-  const { status, documents, error, uploads, deletions } = library
+  const { status, documents, error, uploads, deletions, retries } = library
   const loadingFirstTime = status === 'loading' && documents.length === 0
   const allSelected = selection.selected.length === 0
 
@@ -86,6 +86,8 @@ export default function DocumentLibrary({ library, selection }) {
                 document={document}
                 deletion={deletions[document.document_id]}
                 onDelete={library.remove}
+                retry={retries[document.document_id]}
+                onRetry={library.retryProcessing}
                 selected={selection.isSelected(document.document_id)}
                 onToggle={selection.toggle}
               />

@@ -96,7 +96,8 @@ These can be considered later.
 -   List indexed documents.
 -   Show document status and basic metadata.
 -   Delete documents.
--   Re-index a document.
+-   Re-index a document. Currently supported for failed documents only
+    ("Retry processing"); see FR-10.
 
 ### F4. Chat
 
@@ -173,6 +174,22 @@ The system shall expose retrieved sources to the frontend.
 
 The system shall allow deletion and re-indexing of documents.
 
+Current status:
+
+-   Deletion is supported.
+-   Failed documents can be processed again under the same document ID
+    and filename ("Retry processing", `POST
+    /api/documents/{document_id}/reindex`).
+-   Re-indexing healthy `processed` documents is not yet supported.
+    Changing the chunk-size settings does not reprocess documents that
+    are already processed. The new settings apply to new uploads,
+    retried documents, and documents that startup recovery processes
+    again (interrupted ones, or processed ones whose vectors are
+    missing).
+-   Safe re-indexing of processed documents, which keeps the existing
+    vectors searchable until a new run succeeds, remains a future
+    requirement.
+
 ## 8. Quality Requirements
 
 ### Privacy
@@ -217,6 +234,8 @@ Version 1 is successful when a user can:
 -   OCR for scanned PDFs.
 -   Hybrid keyword + semantic search.
 -   Re-ranking.
+-   Safe re-indexing of processed documents (for example after changing
+    chunk settings).
 -   Streaming responses.
 -   Persistent conversation history.
 -   Authentication.

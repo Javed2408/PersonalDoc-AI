@@ -421,6 +421,11 @@ code {
   color: var(--color-text);
 }
 
+/* Two classes, to win over .button--small's margin, which comes later in this file. */
+.doc-item .doc-item__retry {
+  margin-top: var(--space-2);
+}
+
 .doc-item__status {
   display: flex;
   flex-wrap: wrap;

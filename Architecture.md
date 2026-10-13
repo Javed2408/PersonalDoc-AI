@@ -209,7 +209,26 @@ Deletes a document and its indexed chunks.
 
 ### `POST /api/documents/{document_id}/reindex`
 
-Reprocesses a document.
+Processes a **failed** document again through the same background
+worker and pipeline, keeping its document ID, stored file and original
+filename. Clients poll `GET /api/documents` for the result.
+
+-   `202`: accepted; returns the document metadata, now `processing`.
+-   `409`: the document is `uploaded` or `processing` (already queued or
+    running), or `processed` (re-indexing healthy documents is not
+    supported yet).
+-   `404`: unknown document. `422`: malformed ID.
+
+Status flow: `uploaded -> processing -> processed | failed`, and
+`failed -> processing` on a retry. The `failed -> processing` switch is
+one locked metadata update, so concurrent requests queue at most one
+job. A retry that fails again removes its vectors and records the new
+reason.
+
+Processed documents are not re-indexed here: a failed run would remove
+their working vectors, so that needs a design that keeps the old
+vectors until a new run succeeds (a future requirement). Changing chunk
+settings does not reprocess processed documents.
 
 ### `POST /api/chat`
 

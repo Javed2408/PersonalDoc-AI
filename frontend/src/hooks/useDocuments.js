@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { deleteDocument, listDocuments, uploadDocument } from '../services/api.js'
+import { deleteDocument, listDocuments, reindexDocument, uploadDocument } from '../services/api.js'
 
 const UPLOADED_NOTICE_MS = 3000
 const POLL_INTERVAL_MS = 1500
@@ -12,6 +12,9 @@ export function useDocuments() {
   const [library, setLibrary] = useState({ status: 'loading', documents: [], error: null })
   const [uploads, setUploads] = useState([])
   const [deletions, setDeletions] = useState({})
+  // Retries of failed processing, by document ID: { status: 'submitting' | 'failed', error }.
+  const [retries, setRetries] = useState({})
+  const retrying = useRef(new Set())
   const [attempt, setAttempt] = useState(0)
   const timers = useRef(new Set())
   const libraryStatus = useRef(library.status)
@@ -69,6 +72,16 @@ export function useDocuments() {
     const pending = timers.current
     return () => pending.forEach(clearTimeout)
   }, [])
+
+  // A retry error belongs to the failure it was shown with. Once the document has moved on
+  // (processing again, processed, or deleted), drop it so a later failure doesn't inherit it.
+  useEffect(() => {
+    setRetries((prev) => {
+      const failed = new Set(library.documents.filter((doc) => doc.status === 'failed').map((doc) => doc.document_id))
+      const kept = Object.entries(prev).filter(([id, retry]) => retry.status === 'submitting' || failed.has(id))
+      return kept.length === Object.keys(prev).length ? prev : Object.fromEntries(kept)
+    })
+  }, [library.documents])
 
   const refresh = useCallback(() => setAttempt((n) => n + 1), [])
 
@@ -135,5 +148,40 @@ export function useDocuments() {
     reloadIfStale()
   }, [reloadIfStale])
 
-  return { ...library, uploads, deletions, refresh, upload, retryUpload, dismissUpload, remove }
+  const retryProcessing = useCallback(async (documentId) => {
+    // Synchronous guard: a double click can't send two requests before the button disables.
+    if (retrying.current.has(documentId)) return
+    retrying.current.add(documentId)
+    setRetries((prev) => ({ ...prev, [documentId]: { status: 'submitting', error: null } }))
+    try {
+      const document = await reindexDocument(documentId)
+      mutations.current += 1
+      // Now "processing", so the list polls until the final result.
+      setLibrary((prev) => ({
+        ...prev,
+        documents: prev.documents.map((doc) => (doc.document_id === documentId ? document : doc)),
+      }))
+      setRetries(({ [documentId]: _done, ...rest }) => rest)
+      reloadIfStale()
+    } catch (error) {
+      setRetries((prev) => ({ ...prev, [documentId]: { status: 'failed', error: error.message } }))
+      // Deleted, or no longer failed (e.g. retried from another tab): show the current state.
+      if (error.status === 404 || error.status === 409) refresh()
+    } finally {
+      retrying.current.delete(documentId)
+    }
+  }, [refresh, reloadIfStale])
+
+  return {
+    ...library,
+    uploads,
+    deletions,
+    retries,
+    refresh,
+    upload,
+    retryUpload,
+    dismissUpload,
+    remove,
+    retryProcessing,
+  }
 }

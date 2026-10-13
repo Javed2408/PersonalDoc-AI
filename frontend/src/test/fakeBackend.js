@@ -63,17 +63,29 @@ function toResponse({ status, body }) {
   })
 }
 
+/** Like the real endpoint: a failed document goes back to `processing` (202); anything else is refused. */
+export function acceptFailedOnly(documentId, backend) {
+  const document = backend.documents.find((doc) => doc.document_id === documentId)
+  if (!document) return failure(404, 'Document not found. It may have been deleted.')
+  if (document.status !== 'failed') return failure(409, 'This document is already being processed.')
+  const queued = { ...document, status: 'processing', processing_error: null }
+  backend.documents = backend.documents.map((doc) => (doc === document ? queued : doc))
+  return { status: 202, body: queued }
+}
+
 /**
  * `chat` is a function (requestBody) => reply | Promise<reply>, where reply is
  * { status, body } (see answered / notFound / failure).
+ * `reindex` is a function (documentId, backend) => reply | Promise<reply>.
  */
 export function installBackend({
   documents = [],
   llm = { status: 'ready', model: 'llama3.2:3b' },
   healthDown = false,
   chat = () => answered('An answer.', []),
+  reindex = acceptFailedOnly,
 } = {}) {
-  const backend = { documents, llm, healthDown, chat, requests: [] }
+  const backend = { documents, llm, healthDown, chat, reindex, requests: [] }
 
   const fetchMock = vi.fn(async (url, init = {}) => {
     const method = init.method ?? 'GET'
@@ -93,6 +105,10 @@ export function installBackend({
     }
     if (path === '/api/chat' && method === 'POST') {
       return toResponse(await backend.chat(body))
+    }
+    const reindexPath = path.match(/^\/api\/documents\/([^/]+)\/reindex$/)
+    if (reindexPath && method === 'POST') {
+      return toResponse(await backend.reindex(decodeURIComponent(reindexPath[1]), backend))
     }
     return toResponse({ status: 404, body: { detail: 'Not Found' } })
   })

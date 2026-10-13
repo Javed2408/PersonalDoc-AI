@@ -187,7 +187,10 @@ Make answers auditable.
 -   Display page number.
 -   Display source excerpt.
 -   Add source cards to chat responses.
--   Add document delete/re-index actions.
+-   Add document delete/re-index actions. Delete exists since Phase 2.
+    Re-index was added after Phase 8 as a follow-up, for failed
+    documents only ("Retry processing"). Re-indexing processed
+    documents remains a future requirement (PRD FR-10).
 
 ### Acceptance Criteria
 

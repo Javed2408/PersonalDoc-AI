@@ -1,8 +1,9 @@
 """Background document processing: extract text, chunk it, embed it, store the vectors.
 
-Status flow: uploaded -> processing -> processed | failed. "processed" is only set once
-the vectors are in the vector store. Jobs run one at a time on a single worker thread so
-CPU-heavy extraction and embedding never block request handling.
+Status flow: uploaded -> processing -> processed | failed, and failed -> processing when a
+failed document is retried. "processed" is only set once the vectors are in the vector store.
+Jobs run one at a time on a single worker thread so CPU-heavy extraction and embedding never
+block request handling.
 """
 
 import logging
@@ -13,10 +14,16 @@ from app.config import Settings
 from app.ingestion.loader import ExtractionError
 from app.ingestion.pipeline import process_pdf
 from app.ingestion.splitter import RecursiveTextSplitter
+from app.models.schemas import DocumentMetadata
 from app.retrieval.embeddings import EmbeddingError
 from app.retrieval.vector_store import ChromaVectorStore, VectorStoreError
 from app.services.chunk_store import ChunkStoreError, JsonChunkStore, StoredChunks
-from app.services.document_service import DocumentService, DocumentStorageError
+from app.services.document_service import (
+    DocumentNotFoundError,
+    DocumentService,
+    DocumentStateError,
+    DocumentStorageError,
+)
 from app.services.document_store import DocumentStoreError, JsonDocumentStore
 from app.services.indexing_service import DocumentIndexer, IndexingCancelled
 
@@ -52,6 +59,33 @@ class DocumentProcessor:
         with self._pending_lock:
             self._pending.add(future)
         future.add_done_callback(self._forget)
+
+    def retry_failed(self, document_id: str) -> DocumentMetadata:
+        """Queue a failed document for processing again, keeping its ID, file and name.
+
+        Checking for "failed" and switching to "processing" is one locked store update, so of
+        several simultaneous retries exactly one queues a job and the others get a conflict.
+        Processed documents are never reprocessed here: a failed attempt would remove their
+        working vectors.
+        """
+        try:
+            document, accepted = self._store.update_if_status(
+                document_id, "failed", status="processing", processing_error=None
+            )
+        except DocumentStoreError as error:
+            raise DocumentStorageError("The document library could not be loaded.") from error
+        if document is None:
+            raise DocumentNotFoundError("Document not found. It may have been deleted.")
+        if not accepted:
+            if document.status == "processed":
+                raise DocumentStateError(
+                    "This document is already processed. Reprocessing a processed document "
+                    "isn't supported in this version."
+                )
+            raise DocumentStateError("This document is already being processed.")
+        logger.info("Retrying processing of document %s", document_id)
+        self.submit(document_id)
+        return document
 
     def resume_pending(self) -> None:
         """Re-queue interrupted documents, and processed ones whose vectors are missing.
@@ -164,12 +198,21 @@ class DocumentProcessor:
             self._vector_store.delete_document(document_id)
         except VectorStoreError:
             logger.error("Could not remove partial vectors for document %s", document_id)
-        try:
-            if not keep_chunks:
+        if not keep_chunks:
+            try:
                 self._chunk_store.delete(document_id)
-            self._store.update(document_id, status="failed", processing_error=message, chunk_count=None)
-        except (ChunkStoreError, DocumentStoreError):
+            except ChunkStoreError:
+                # Still record the failure: a document left "processing" with no job can't be retried.
+                # Chunks of a failed document are never served, and a retry overwrites them.
+                logger.error("Could not remove chunks of failed document %s", document_id)
+        try:
+            updated = self._store.update(document_id, status="failed", processing_error=message, chunk_count=None)
+        except DocumentStoreError:
             logger.error("Could not record processing failure for document %s", document_id)
+            return
+        if updated is None:
+            # Deleted while we were working: keep nothing, not even the chunks.
+            self._discard(document_id)
 
     def _discard(self, document_id: str) -> None:
         try:

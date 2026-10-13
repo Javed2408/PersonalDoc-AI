@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { ApiError, chat, getHealth } from './api.js'
+import { ApiError, chat, getHealth, reindexDocument } from './api.js'
 
 function stubFetch(status, body) {
   const fetchMock = vi.fn(async () =>
@@ -67,6 +67,30 @@ describe('chat', () => {
 
     expect(error.status).toBe(422)
     expect(error.message).toBe('The request was invalid.')
+  })
+})
+
+describe('reindexDocument', () => {
+  it("posts to the document's reindex endpoint with no body and returns the document", async () => {
+    const document = { document_id: 'ab'.repeat(16), status: 'processing' }
+    const fetchMock = stubFetch(202, document)
+
+    const result = await reindexDocument('ab'.repeat(16))
+
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe(`/api/documents/${'ab'.repeat(16)}/reindex`)
+    expect(init.method).toBe('POST')
+    expect(init.body).toBeUndefined()
+    expect(result).toEqual(document)
+  })
+
+  it("keeps the backend's explanation of a conflict", async () => {
+    stubFetch(409, { detail: 'This document is already being processed.' })
+
+    const error = await reindexDocument('ab'.repeat(16)).catch((e) => e)
+
+    expect(error.status).toBe(409)
+    expect(error.message).toBe('This document is already being processed.')
   })
 })
 

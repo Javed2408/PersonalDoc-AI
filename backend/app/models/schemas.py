@@ -21,7 +21,7 @@ class HealthResponse(BaseModel):
     llm: LLMHealth
 
 
-# uploaded -> processing -> processed | failed.
+# uploaded -> processing -> processed | failed; retrying a failed document sends it back to processing.
 # "processed" means text was extracted, chunked, embedded and stored in the vector index.
 DocumentStatus = Literal["uploaded", "processing", "processed", "failed"]
 

@@ -11,7 +11,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from app.models.schemas import DocumentMetadata
+from app.models.schemas import DocumentMetadata, DocumentStatus
 from app.services.json_files import write_json_atomic
 
 logger = logging.getLogger(__name__)
@@ -46,19 +46,35 @@ class JsonDocumentStore:
         """Apply field changes; returns the updated document, or None if it no longer exists."""
         with self._lock:
             documents = self._read()
-            current = documents.get(document_id)
-            if current is None:
+            if document_id not in documents:
                 return None
-            updated = current.model_copy(update=changes)
-            documents[document_id] = DocumentMetadata.model_validate(updated.model_dump())
-            self._write(documents)
-            return documents[document_id]
+            return self._apply(documents, document_id, changes)
+
+    def update_if_status(
+        self, document_id: str, expected_status: DocumentStatus, **changes: object
+    ) -> tuple[DocumentMetadata | None, bool]:
+        """Apply field changes only if the document currently has `expected_status`, in one locked step.
+
+        Returns the document as it now is (None if it doesn't exist) and whether it was changed.
+        """
+        with self._lock:
+            documents = self._read()
+            current = documents.get(document_id)
+            if current is None or current.status != expected_status:
+                return current, False
+            return self._apply(documents, document_id, changes), True
 
     def remove(self, document_id: str) -> None:
         with self._lock:
             documents = self._read()
             if documents.pop(document_id, None) is not None:
                 self._write(documents)
+
+    def _apply(self, documents: dict[str, DocumentMetadata], document_id: str, changes: dict) -> DocumentMetadata:
+        updated = documents[document_id].model_copy(update=changes)
+        documents[document_id] = DocumentMetadata.model_validate(updated.model_dump())
+        self._write(documents)
+        return documents[document_id]
 
     def _read(self) -> dict[str, DocumentMetadata]:
         if not self._path.exists():

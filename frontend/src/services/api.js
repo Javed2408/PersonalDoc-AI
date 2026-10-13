@@ -87,6 +87,11 @@ export function deleteDocument(documentId, options) {
   return request(`/api/documents/${encodeURIComponent(documentId)}`, { ...options, method: 'DELETE' })
 }
 
+/** Process a failed document again. Resolves to the document, now `processing`; poll the list for the result. */
+export function reindexDocument(documentId, options) {
+  return request(`/api/documents/${encodeURIComponent(documentId)}/reindex`, { ...options, method: 'POST' })
+}
+
 /**
  * Where the browser can open a document's original PDF. Built-in viewers in Chrome, Edge and Firefox
  * honour `#page=N`; others open at the first page.

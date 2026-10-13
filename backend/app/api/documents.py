@@ -1,4 +1,4 @@
-"""Document upload, listing, deletion, chunk inspection and PDF preview endpoints."""
+"""Document upload, listing, deletion, retrying failed processing, chunk inspection and PDF preview."""
 
 from typing import Annotated
 
@@ -14,8 +14,8 @@ from app.models.schemas import (
 from app.services.document_service import (
     DocumentError,
     DocumentNotFoundError,
-    DocumentNotProcessedError,
     DocumentService,
+    DocumentStateError,
     DocumentStorageError,
     FileTooLargeError,
     UnsupportedFileTypeError,
@@ -36,7 +36,7 @@ def get_document_processor(request: Request) -> DocumentProcessor:
 def to_http_error(error: DocumentError) -> HTTPException:
     if isinstance(error, DocumentNotFoundError):
         code = status.HTTP_404_NOT_FOUND
-    elif isinstance(error, DocumentNotProcessedError):
+    elif isinstance(error, DocumentStateError):
         code = status.HTTP_409_CONFLICT
     elif isinstance(error, FileTooLargeError):
         code = status.HTTP_413_CONTENT_TOO_LARGE
@@ -121,6 +121,21 @@ def get_document_file(
         content_disposition_type="inline",
         headers=PDF_RESPONSE_HEADERS,
     )
+
+
+@router.post("/{document_id}/reindex", response_model=DocumentMetadata, status_code=status.HTTP_202_ACCEPTED)
+def reindex_document(
+    document_id: DocumentIdPath,
+    processor: DocumentProcessor = Depends(get_document_processor),
+) -> DocumentMetadata:
+    """Process a failed document again, under the same ID. Clients poll the list for the result.
+
+    Only failed documents: anything queued, processing or processed gets 409.
+    """
+    try:
+        return processor.retry_failed(document_id)
+    except DocumentError as error:
+        raise to_http_error(error) from error
 
 
 @router.delete("/{document_id}", response_model=DocumentDeleteResponse)

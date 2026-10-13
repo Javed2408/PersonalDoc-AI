@@ -122,6 +122,7 @@ Interactive API docs are at http://127.0.0.1:8000/docs.
 | `POST` | `/api/documents/upload` | Upload one PDF (multipart field `file`). Returns `201` with metadata |
 | `GET` | `/api/documents/{document_id}/chunks` | Extracted text chunks of a processed document |
 | `GET` | `/api/documents/{document_id}/file` | The original PDF, shown inline (`application/pdf`). Only a real 32-character document ID is accepted (`422` otherwise); unknown, deleted or missing files give a readable `404`. The file is always `<document_id>.pdf` inside `DATA_DIR/documents`, never a client-supplied path. Sent with `nosniff`, `Cache-Control: no-store` and `Cross-Origin-Resource-Policy: same-site` |
+| `POST` | `/api/documents/{document_id}/reindex` | Process a **failed** document again, under the same ID and filename. Returns `202` with the document, now `processing`. `409` if it is `uploaded`, `processing` or `processed` (re-indexing processed documents isn't supported yet), `404` if unknown, `422` for a malformed ID |
 | `DELETE` | `/api/documents/{document_id}` | Delete a document's file, chunks and metadata |
 | `POST` | `/api/retrieval/search` | Most relevant chunks for a question (no answer generation) |
 | `POST` | `/api/chat` | Grounded answer from a local LLM, with its sources (needs Ollama) |
@@ -139,6 +140,7 @@ After an upload is stored, a background worker processes it:
 ```text
 uploaded -> processing -> processed   (extracted, chunked, embedded and stored in ChromaDB)
                        -> failed      (processing_error explains why; the PDF is kept)
+failed -> processing                  (Retry processing: POST /api/documents/{document_id}/reindex)
 ```
 
 - Text is extracted page by page with [pypdf](https://pypi.org/project/pypdf/). Empty pages are kept in the page count but produce no chunks.
@@ -148,8 +150,14 @@ uploaded -> processing -> processed   (extracted, chunked, embedded and stored i
 - Each chunk is embedded with a local [sentence-transformers](https://www.sbert.net/) model and stored in ChromaDB. The vector ID is the chunk's `chunk_id`; the vector keeps the chunk text and the metadata above (except the text itself, which is stored as the record's document).
 - A document only becomes `processed` once its vectors are stored. If embedding or storage fails, it becomes `failed`; its PDF and chunks are kept and partial vectors removed.
 - Reprocessing never duplicates vectors: chunks whose text and metadata are unchanged are not re-embedded, changed ones are replaced, and vectors for chunks that no longer exist are deleted.
-- At startup, documents left `uploaded` or `processing` are processed again, and `processed` documents whose vectors are missing (for example after deleting `data/chroma`) are re-indexed.
+- At startup, documents left `uploaded` or `processing` are processed again, and `processed` documents whose vectors are missing (for example after deleting `data/chroma`) are re-indexed. `failed` documents are never retried automatically.
+- A failed document can be retried (once the cause is fixed, e.g. the embedding model is available again). The backend queues only one job per document however often you ask (this relies on a single backend process).
+- A retry that fails again records the new reason and removes the vectors it stored. This cleanup is best-effort: if ChromaDB errors, leftover vectors stay until a later retry or deleting the document removes them. They are never searched, because only `processed` documents are.
+- Changing `CHUNK_SIZE` or `CHUNK_OVERLAP` doesn't reprocess documents that are already processed. The new settings apply to new uploads, retried documents, and documents that startup recovery processes again (interrupted ones, or processed ones whose vectors are missing).
 - Deleting a document removes its PDF, chunks, vectors and metadata.
+  - If the document is being processed at that moment, the delete cleans up chunks and vectors once more after removing the metadata. The job then notices the document is gone and discards anything it writes later, so nothing reappears.
+  - If a step fails before the metadata is removed, the delete returns an error and the document stays listed; deleting it again finishes the job.
+  - Cleanup after the metadata is gone is best-effort. If ChromaDB or the file system errors at that point, orphaned chunks or vectors can stay on disk, but they are never searched or shown.
 
 ### Retrieval
 
@@ -370,7 +378,7 @@ The header shows what is actually available: **Local / Ready** only when the bac
 
 ### Document library
 
-The **Documents** sidebar lets you upload PDFs (button or drag and drop), see each upload's state, retry or dismiss failed uploads, refresh the list, and delete a document after an inline confirmation. Each document shows its processing status (Uploaded, Processing…, Processed with page and chunk counts, or Failed with the reason); the list refreshes itself while anything is still processing.
+The **Documents** sidebar lets you upload PDFs (button or drag and drop), see each upload's state, retry or dismiss failed uploads, refresh the list, and delete a document after an inline confirmation. Each document shows its processing status (Uploaded, Processing…, Processed with page and chunk counts, or Failed with the reason); the list refreshes itself while anything is still processing. A failed document has a **Retry processing** button that sends it back to Processing… and then shows the new result; processed documents have no re-index action.
 
 In development, the Vite server proxies `/api/*` to the backend, so the browser never makes a cross-origin request.
 
